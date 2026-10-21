@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Supplier Evaluation System</title>
+<link rel="stylesheet" href="vendor/fonts/fonts.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="busyIndicator" class="busy-indicator" style="display:none">
+  <div class="hourglass"><div class="hourglass-inner"></div></div>
+  <span data-i18n="loadingBusy">Working…</span>
+</div>
+
+<div id="rejectModal" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <h3 data-i18n="rejectModalTitle">Reject Evaluation</h3>
+    <p class="hint" data-i18n="rejectModalHint">Select which section(s) need to be redone, and explain why.</p>
+    <div class="field" style="display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="reject_q" style="width:auto">
+      <label for="reject_q" style="margin:0;font-weight:400" data-i18n="catQuality">Quality</label>
+    </div>
+    <div class="field" style="display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="reject_d" style="width:auto">
+      <label for="reject_d" style="margin:0;font-weight:400" data-i18n="rejectDeliveryLabel">Delivery/Purchase</label>
+    </div>
+    <div class="field">
+      <label data-i18n="rejectReasonLabel">Reason (required)</label>
+      <textarea id="reject_reason"></textarea>
+    </div>
+    <div class="actions-row">
+      <button class="btn primary" id="btnRejectConfirm" data-i18n="rejectConfirm">Confirm Reject</button>
+      <button class="btn ghost" id="btnRejectCancel" data-i18n="cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="submitPreviewModal" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <h3 data-i18n="submitPreviewTitle">Confirm Submission</h3>
+    <p class="hint" data-i18n="submitPreviewHint">Quick check of what's about to be submitted.</p>
+    <div id="submitPreviewBody"></div>
+    <div class="actions-row">
+      <button class="btn primary" id="btnSubmitPreviewConfirm" data-i18n="submitPreviewConfirm">Confirm &amp; Submit</button>
+      <button class="btn ghost" id="btnSubmitPreviewCancel" data-i18n="cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ LOGIN GATE ============ -->
+<div class="login-gate" id="loginGate">
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="rail-mark">SE</span>
+      <div>
+        <strong data-i18n="appTitle">Supplier Evaluation</strong>
+        <span data-i18n="appSub">E&amp;H Precision (Thailand)</span>
+      </div>
+    </div>
+
+    <div class="login-tabs">
+      <button class="login-tab active" data-mode="signin" data-i18n="signIn">Sign in</button>
+      <button class="login-tab" data-mode="signup" data-i18n="signUp">Create account</button>
+    </div>
+
+    <p class="conn-check" id="loginConnStatus">Checking Supabase…</p>
+
+    <div class="field" style="position:relative">
+      <label data-i18n="userId">User ID</label>
+      <input id="auth_email" type="text" placeholder="User ID" data-i18n-ph="userId" maxlength="32" autocapitalize="off" autocomplete="off">
+      <div id="authIdSuggestions" class="id-suggest-list" style="display:none"></div>
+    </div>
+    <div class="field">
+      <label data-i18n="password">Password</label>
+      <input id="auth_password" type="password" placeholder="••••••" maxlength="32" autocomplete="current-password">
+    </div>
+
+    <div class="field signin-only" style="display:flex;align-items:center;gap:8px;margin-top:10px">
+      <input id="auth_remember" type="checkbox" style="width:auto">
+      <label for="auth_remember" style="margin:0;font-weight:400" data-i18n="rememberMe">Remember User ID on this device</label>
+    </div>
+
+    <div class="field signup-only" style="display:none">
+      <label data-i18n="fullName">Full name</label>
+      <input id="auth_fullname" type="text" placeholder="Somchai Jaidee">
+    </div>
+    <div class="field signup-only" style="display:none">
+      <label data-i18n="department">Department</label>
+      <select id="auth_department">
+        <option value="qa" data-i18n="deptQa">QA — Quality</option>
+        <option value="cs" data-i18n="deptCs">CS — Customer Service</option>
+        <option value="mp" data-i18n="deptMp">MP — Material Planning</option>
+      </select>
+      <small class="field-hint" data-i18n="noAdminSignup">Admin accounts can't be created here — ask an admin to set one up in Supabase.</small>
+    </div>
+
+    <button class="btn primary" id="btnAuthSubmit" style="width:100%;margin-top:6px" data-i18n="signIn">Sign in</button>
+    <p class="login-msg" id="loginMsg"></p>
+  </div>
+</div>
+
+<div class="shell" id="appShell" style="display:none">
+  <div id="loadingOverlay" class="loading-overlay" style="display:none">
+    <div class="loading-box">
+      <div class="hourglass"><div class="hourglass-inner"></div></div>
+      <h2 data-i18n="loadingTitle">Loading your data</h2>
+      <div class="progress-track"><div id="loadingProgressBar" class="progress-fill" style="width:0%"></div></div>
+      <p id="loadingStatusText" class="hint"></p>
+    </div>
+  </div>
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="rail">
+    <div class="rail-brand">
+      <span class="rail-mark">SE</span>
+      <div class="rail-brand-text">
+        <strong data-i18n="appTitle">Supplier Evaluation</strong>
+        <span data-i18n="appSub">E&amp;H Precision (Thailand)</span>
+      </div>
+    </div>
+
+    <nav class="rail-nav">
+      <button class="rail-link active" data-tab="dashboard">
+        <svg viewBox="0 0 20 20"><rect x="2" y="10" width="4" height="8"/><rect x="8" y="5" width="4" height="13"/><rect x="14" y="2" width="4" height="16"/></svg>
+        <span data-i18n="dashboard">Dashboard</span>
+      </button>
+      <button class="rail-link" data-tab="list">
+        <svg viewBox="0 0 20 20"><rect x="2" y="3" width="16" height="3"/><rect x="2" y="8.5" width="16" height="3"/><rect x="2" y="14" width="16" height="3"/></svg>
+        <span data-i18n="evalList">Evaluation List</span>
+      </button>
+      <button class="rail-link" data-tab="profile">
+        <svg viewBox="0 0 20 20"><circle cx="10" cy="6" r="3.2"/><path d="M3 17c0-4 3-6 7-6s7 2 7 6"/></svg>
+        <span data-i18n="supplierProfile">Supplier Profile</span>
+      </button>
+      <button class="rail-link" data-tab="report">
+        <svg viewBox="0 0 20 20"><rect x="4" y="2" width="12" height="16" rx="1"/><line x1="6.5" y1="6" x2="13.5" y2="6"/><line x1="6.5" y1="9.5" x2="13.5" y2="9.5"/><line x1="6.5" y1="13" x2="11" y2="13"/></svg>
+        <span data-i18n="reportPreview">Report</span>
+      </button>
+      <button class="rail-link" data-tab="setting">
+        <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.6"/><path d="M10 3v2M10 15v2M3 10h2M15 10h2M5.3 5.3l1.4 1.4M13.3 13.3l1.4 1.4M14.7 5.3l-1.4 1.4M6.7 13.3l-1.4 1.4"/></svg>
+        <span data-i18n="setting">Setup &amp; Status</span>
+      </button>
+    </nav>
+
+    <div class="rail-user" id="railUser">
+      <span class="user-name" id="userName">—</span>
+      <span class="user-dept" id="userDept">—</span>
+      <button class="btn ghost small" id="btnLogout" data-i18n="signOut">Sign out</button>
+    </div>
+
+    <div class="rail-status">
+      <span class="dot" id="connDot"></span>
+      <span id="connLabel" data-i18n="connChecking">Checking Supabase…</span>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+
+    <header class="topbar">
+      <div id="pageHeadTitle" class="page-head-title"></div>
+      <div class="topbar-actions">
+        <button class="btn ghost" id="btnBackToListFromInput" data-i18n="backToList" style="display:none">&larr; Back to List</button>
+        <button class="btn ghost nav-hist-btn" id="btnNavBack" title="Back">&larr;</button>
+        <button class="btn ghost nav-hist-btn" id="btnNavForward" title="Forward">&rarr;</button>
+        <button class="lang-switch" id="langToggle" role="switch" title="Language" data-lang="th">
+          <span class="lang-switch-thumb"></span>
+          <span class="lang-switch-opt lang-opt-en">EN</span>
+          <span class="lang-switch-opt lang-opt-th">TH</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="banner" class="banner" style="display:none"></div>
+
+    <!-- ---------- DASHBOARD: SUPPLIER COMMAND CENTER ---------- -->
+    <section id="dashboard" class="view active">
+      <div class="command-filter panel compact-panel">
+        <div class="command-filter-grid">
+          <div class="field"><label data-i18n="dashPeriodLabel">Dashboard period</label><select id="dashPeriod"></select></div>
+          <div class="field"><label data-i18n="dashGroupLabel">Supplier group</label><select id="dashCategory"><option value="" data-i18n="dashAllGroups">All groups</option></select></div>
+          <div class="field"><label data-i18n="dashShipmentLabel">Shipment</label><select id="dashShipment"><option value="" data-i18n="dashAll">All</option><option value="normal" data-i18n="dashNormal">Normal</option><option value="no_shipment" data-i18n="dashNoShipment">No shipment</option></select></div>
+          <div class="field"><label data-i18n="dashRiskLabel">Risk</label><select id="dashRisk"><option value="" data-i18n="dashAll">All</option><option value="critical" data-i18n="dashCritical">Critical</option><option value="high" data-i18n="dashHigh">High</option><option value="watch" data-i18n="dashWatch">Watch</option><option value="low" data-i18n="dashLow">Low</option></select></div>
+          <button class="btn ghost" id="btnDashReset" data-i18n="dashReset">Reset</button>
+        </div>
+      </div>
+
+      <div class="panel" id="actionBoardPanel">
+        <div class="panel-head"><div><h2 data-i18n="actionBoardTitle">What I need to do</h2></div></div>
+        <div class="action-board-grid">
+          <div class="action-col">
+            <h3 data-i18n="actionColQa">QA</h3>
+            <div id="actionColQaList" class="action-col-list"></div>
+          </div>
+          <div class="action-col">
+            <h3 data-i18n="actionColCsMp">CS / MP</h3>
+            <div id="actionColCsMpList" class="action-col-list"></div>
+          </div>
+          <div class="action-col">
+            <h3 data-i18n="actionColSup">Supervisor</h3>
+            <div id="actionColSupList" class="action-col-list"></div>
+          </div>
+          <div class="action-col">
+            <h3 data-i18n="actionColMgr">Manager</h3>
+            <div id="actionColMgrList" class="action-col-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tile-grid">
+        <button class="action-chip" data-action-filter="qa"><span id="actQa">0</span><small data-i18n="dashQaPending">QA pending</small></button>
+        <button class="action-chip" data-action-filter="delivery"><span id="actDelivery">0</span><small data-i18n="dashCsPending">CS/MP pending</small></button>
+        <button class="action-chip" data-action-filter="approval"><span id="actApproval">0</span><small data-i18n="dashReadyApproval">Ready approval</small></button>
+        <button class="action-chip danger" data-action-filter="ca"><span id="actCa">0</span><small data-i18n="dashCaOverdue">CA overdue</small></button>
+        <div class="kpi"><span class="kpi-label" data-i18n="dashCycleCoverage">Cycle coverage</span><span class="kpi-num" id="kpiCompletion">0%</span><span class="kpi-delta" id="kpiCompletionSub">0 / 0 suppliers</span></div>
+        <div class="kpi"><span class="kpi-label" data-i18n="avgScore">Average score</span><span class="kpi-num" id="kpiAvg">0</span><span class="kpi-delta" id="kpiAvgDelta">—</span></div>
+        <div class="kpi"><span class="kpi-label" data-i18n="dashBelowTarget">Below target</span><span class="kpi-num" id="kpiRisk">0</span><span class="kpi-delta" data-i18n="dashNeedsIntervention">Needs intervention</span></div>
+        <div class="kpi"><span class="kpi-label" data-i18n="dashHighRiskSuppliers">High-risk suppliers</span><span class="kpi-num" id="kpiHighRisk">0</span><span class="kpi-delta" data-i18n="dashRiskIndex60">Risk index ≥ 60</span></div>
+        <div class="kpi"><span class="kpi-label" data-i18n="dashOpenCa">Open corrective actions</span><span class="kpi-num" id="kpiOpenCa">0</span><span class="kpi-delta" id="kpiCaSub">0 overdue</span></div>
+        <div class="kpi"><span class="kpi-label" data-i18n="dashNoShipment">No shipment</span><span class="kpi-num" id="kpiNoShipment">0</span><span class="kpi-delta" data-i18n="dashExcludedNa">Excluded where N/A</span></div>
+      </div>
+
+      <div class="command-grid command-grid-top">
+        <div class="panel">
+          <div class="panel-head"><div><h2 data-i18n="dashCycleHealth">Evaluation cycle health</h2><p class="hint" data-i18n="dashCycleHealthHint">Work progress by section and approval</p></div><b id="cycleHealthPct">0%</b></div>
+          <div id="cyclePipeline" class="pipeline"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><h2 data-i18n="dashPriorityQueue">Priority &amp; Early Warning</h2><p class="hint" data-i18n="dashPriorityHint">Highest-impact actions first — high current risk and/or a recent negative signal</p></div><button class="row-btn" id="btnViewAllRisk" data-i18n="dashViewAll">View all</button></div>
+          <div id="priorityQueue" class="priority-list"></div>
+        </div>
+      </div>
+
+      <div class="command-grid command-grid-3">
+        <div class="panel">
+          <div class="panel-head"><div><h2 data-i18n="dashRiskMatrix">Supplier risk matrix</h2></div></div>
+          <div class="risk-matrix-wrap"><canvas id="riskMatrix"></canvas><div id="riskMatrixTooltip" class="chart-tooltip"></div></div>
+          <div class="matrix-legend"><span data-i18n="dashLowRisk">Low risk</span><span data-i18n="dashWatch">Watch</span><span data-i18n="dashHigh">High</span><span data-i18n="dashCritical">Critical</span></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><h2 data-i18n="dashPerformance12M">12-month performance intelligence</h2><p class="hint" data-i18n="dashPerformanceHint">Selected period and historical movement</p></div></div>
+          <div class="canvas-wrap"><canvas id="performanceTrend"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><h2 data-i18n="dashIssuePareto">Issue Pareto</h2><p class="hint" data-i18n="dashIssueParetoHint">Top causes recorded in itemized scoring, last 12 months</p></div></div>
+          <div id="issuePareto" class="pareto-list"></div>
+        </div>
+      </div>
+    </section>
+    <!-- ---------- SUPPLIER EVALUATION WORKSHEET ---------- -->
+    <section id="input" class="view">
+      <div class="eval-shell">
+        <div class="panel eval-header-card" id="evalHeaderCard">
+          <div id="evalPickerSection">
+            <div class="form-grid eval-context-grid">
+              <div class="field"><label data-i18n="supplier">Supplier</label><select id="f_supplier"></select></div>
+              <div class="field"><label data-i18n="year">Year</label><input id="f_year" type="number" value="2026"></div>
+              <div class="field"><label data-i18n="month">Month</label><select id="f_month">
+                <option value="1" data-i18n="monthJan">Jan</option><option value="2" data-i18n="monthFeb">Feb</option><option value="3" data-i18n="monthMar">Mar</option><option value="4" data-i18n="monthApr">Apr</option><option value="5" data-i18n="monthMay">May</option><option value="6" data-i18n="monthJun">Jun</option><option value="7" data-i18n="monthJul">Jul</option><option value="8" data-i18n="monthAug">Aug</option><option value="9" data-i18n="monthSep">Sep</option><option value="10" data-i18n="monthOct">Oct</option><option value="11" data-i18n="monthNov">Nov</option><option value="12" data-i18n="monthDec">Dec</option>
+              </select></div>
+              <div class="field"><label data-i18n="shipmentStatus">Shipment Status</label><select id="f_shipment"><option value="normal" data-i18n="shipmentNormal">Normal</option><option value="no_shipment" data-i18n="shipmentNone">No Shipment</option></select></div>
+            </div>
+            <div class="form-grid two" id="noShipRow" style="display:none"><div class="field" style="grid-column:1/-1"><label data-i18n="noShipReason">Reason for No Shipment (required)</label><textarea id="f_noship_reason"></textarea></div></div>
+            <div class="actions-row"><button class="btn primary" id="btnLoadWorksheet" data-i18n="loadWorksheet">Open / Create Worksheet</button><button class="btn ghost" id="btnReset" data-i18n="resetForm">Reset</button><span class="hint" id="roleNote"></span></div>
+          </div>
+          <!-- compatibility fields retained for backend workflow -->
+          <input id="f_scoring_mode" type="hidden" value="itemized"><select id="f_status" hidden><option value="draft">Draft</option><option value="submitted">Submitted</option><option value="approved">Approved</option><option value="sent_to_supplier">Sent</option><option value="acknowledged">Closed</option><option value="follow_up_required">Follow up</option></select>
+          <input id="f_quality" type="hidden" value="0"><input id="f_delivery" type="hidden" value="0"><input id="f_purchase" type="hidden" value="0"><input id="f_total_preview" type="hidden"><textarea id="f_qcomment" hidden></textarea><textarea id="f_dcomment" hidden></textarea>
+        </div>
+
+        <div id="worksheetEmpty" class="panel empty-note" data-i18n="worksheetStartHint">Select supplier and period, then open the worksheet.</div>
+        <div id="worksheetBody" style="display:none">
+          <div id="manualLegacyWarning" class="panel" style="display:none;border-left:4px solid var(--warn);background:var(--warn-soft)"></div>
+          <div class="eval-layout">
+            <div class="eval-main">
+              <div class="eval-section panel" id="qualityWorksheet">
+                <div class="eval-section-head"><div><span class="section-kicker">A</span><h2 data-i18n="qualityEvalOfficial">Quality Evaluation (QA & TQM)</h2></div><div class="eval-section-head-right"><div class="section-score"><b id="wsQuality">50</b><span>/ 50</span></div><button type="button" class="section-toggle" id="qualityToggle" aria-label="Toggle section">▾</button></div></div>
+                <div class="flagged-summary" id="qualityFlaggedSummary"></div>
+                <div class="section-detail" id="qualityDetailBody">
+                  <div class="criteria-group"><div class="criteria-group-head"><div><b data-i18n="qualityProblemTitle">A1 Quality Problem</b><span data-i18n="qualityProblemSub">Official score weight: 40 points</span></div><b id="wsA1">40 / 40</b></div><div id="qualityProblemRows"></div></div>
+                  <div class="criteria-group"><div class="criteria-group-head"><div><b data-i18n="environmentTitle">A2 Effect to Environment</b><span data-i18n="environmentSub">Official score weight: 10 points</span></div><b id="wsA2">10 / 10</b></div><div id="environmentRows"></div></div>
+                  <div class="field"><label data-i18n="qualityComment">Quality Comment</label><textarea id="ws_qcomment"></textarea></div>
+                </div>
+              </div>
+
+              <div class="eval-section panel" id="deliveryPurchaseWorksheet">
+                <div class="eval-section-head"><div><span class="section-kicker">B</span><h2 data-i18n="deliveryPurchaseEvalOfficial">Delivery &amp; Purchase Evaluation (CS &amp; MP)</h2></div><div class="eval-section-head-right"><div class="section-score"><b id="wsDeliveryPurchase">50</b><span>/ 50</span></div><button type="button" class="section-toggle" id="deliveryToggle" aria-label="Toggle section">▾</button></div></div>
+                <div class="flagged-summary" id="deliveryFlaggedSummary"></div>
+                <div class="section-detail" id="deliveryDetailBody">
+                  <div class="criteria-group"><div class="criteria-group-head"><div><b data-i18n="deliveryTitle">B1 Delivery</b><span data-i18n="deliverySub">Official score weight: 40 points</span></div><b id="wsDelivery">40 / 40</b></div>
+                    <div id="deliveryNoShipment" class="na-card" style="display:none" data-i18n="deliveryNaMessage">Delivery is N/A because this supplier had no shipment this month.</div>
+                    <div id="deliveryRows"></div>
+                  </div>
+                  <div class="criteria-group"><div class="criteria-group-head"><div><b data-i18n="purchaseTitle">B2 Purchase Amount</b><span data-i18n="purchaseSub">Official score weight: 10 points</span></div><b id="wsPurchase">0 / 10</b></div>
+                    <div id="purchaseNoShipment" class="na-card" style="display:none" data-i18n="purchaseNaMessage">Purchase amount is N/A because this supplier had no shipment this month.</div>
+                    <div id="purchaseTierRows" class="purchase-tiers"></div>
+                  </div>
+                  <div class="field"><label data-i18n="deliveryComment">Delivery Comment</label><textarea id="ws_dcomment"></textarea></div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <h2 data-i18n="evaluationEvidence">Evaluation Evidence</h2>
+                <p class="hint" data-i18n="evaluationEvidenceHint">Attach SCAR, CAR, claim, delivery record or other supporting evidence.</p>
+                <div class="actions-row"><input id="f_attach_file" type="file"><button class="btn ghost" id="btnAttachUpload" data-i18n="attachUpload">Upload</button></div><div id="evalAttachList" class="table-wrap"></div>
+              </div>
+            </div>
+
+            <aside class="score-sticky panel">
+              <div class="ws-aside-title" id="asideEvalTitle"></div>
+              <span class="score-caption" data-i18n="liveScore">Live Score</span><strong id="wsTotal">0%</strong><span class="badge B" id="wsGrade">Grade D</span>
+              <div class="score-breakdown"><div><span data-i18n="catQuality">Quality</span><b id="sumQuality">0 / 50</b></div><div><span data-i18n="catDelivery">Delivery</span><b id="sumDelivery">0 / 40</b></div><div><span data-i18n="catPurchase">Purchase</span><b id="sumPurchase">0 / 10</b></div></div>
+              <div class="completion-box"><span data-i18n="dataCompleteness">Data completeness</span><b id="wsCompleteness">0%</b><div class="confidence-bar"><span id="wsCompletenessBar" style="width:0%"></span></div></div>
+              <p class="hint" id="submitStatusNote"></p>
+              <button class="btn primary" id="btnSave" style="width:100%"></button>
+              <button class="btn primary" id="btnSupApprove" style="width:100%;margin-top:8px" data-i18n="supApproveEval">Supervisor Approve</button>
+              <button class="btn primary" id="btnMgrApprove" style="width:100%;margin-top:8px" data-i18n="mgrApproveEval">Manager Approve</button>
+              <button class="btn ghost" id="btnReject" style="width:100%;margin-top:6px" data-i18n="rejectEval">Reject</button>
+              <button class="btn ghost" id="btnMarkSent" style="width:100%;margin-top:8px" data-i18n="markSent">Mark Sent to Supplier</button>
+              <p class="hint" id="evalActionHint" style="display:none;margin-top:8px"></p>
+            </aside>
+          </div>
+        </div>
+        <div id="itemizedPanel" style="display:none"><div id="itemizedTable"></div><button id="btnSaveItems" hidden></button></div><p id="itemizedNeedsSaveHint" hidden></p>
+      </div>
+    </section>
+    <!-- ---------- EVALUATION LIST ---------- -->
+    <section id="list" class="view">
+      <div class="panel">
+        <div class="filter-row">
+          <input id="filterText" data-i18n-ph="filterTextPh" placeholder="Search supplier / code / comment">
+          <select id="filterGroup"><option value="" data-i18n="allCategories">All Categories</option></select>
+          <select id="filterSupplier"><option value="" data-i18n="allSuppliers">All Suppliers</option></select>
+          <input id="filterYear" type="number" data-i18n-ph="filterYearPh" placeholder="Year">
+          <select id="filterMonth">
+            <option value="" data-i18n="allMonths">All Months</option>
+            <option value="1" data-i18n="monthJan">Jan</option><option value="2" data-i18n="monthFeb">Feb</option><option value="3" data-i18n="monthMar">Mar</option><option value="4" data-i18n="monthApr">Apr</option><option value="5" data-i18n="monthMay">May</option><option value="6" data-i18n="monthJun">Jun</option><option value="7" data-i18n="monthJul">Jul</option><option value="8" data-i18n="monthAug">Aug</option><option value="9" data-i18n="monthSep">Sep</option><option value="10" data-i18n="monthOct">Oct</option><option value="11" data-i18n="monthNov">Nov</option><option value="12" data-i18n="monthDec">Dec</option>
+          </select>
+          <select id="filterGrade">
+            <option value="" data-i18n="allGrades">All Grades</option>
+            <option>A</option><option>B</option><option>C</option><option>D</option>
+          </select>
+          <select id="filterWorkflowStatus">
+            <option value="" data-i18n="allStatus">All Status</option>
+            <option value="wait_both" data-i18n="wf_wait_both">Waiting on QA and MP/CS</option>
+            <option value="wait_cs" data-i18n="wf_wait_cs">Waiting on MP/CS</option>
+            <option value="wait_qa" data-i18n="wf_wait_qa">Waiting on QA</option>
+            <option value="wait_sup" data-i18n="wf_wait_sup">Waiting on Supervisor</option>
+            <option value="wait_mgr" data-i18n="wf_wait_mgr">Waiting on Manager</option>
+            <option value="wait_send" data-i18n="wf_wait_send">Ready to send to Supplier</option>
+            <option value="wait_ca" data-i18n="wf_wait_ca">Waiting on Corrective Action</option>
+            <option value="closed" data-i18n="wf_closed">Closed</option>
+          </select>
+          <button class="btn ghost" id="btnRefreshList" data-i18n="refresh">Refresh</button>
+        </div>
+        <div class="actions-row" style="margin-bottom:10px;align-items:center;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:16px">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)">
+              <input id="filterOpenOnly" type="checkbox" style="width:auto" checked>
+              <span data-i18n="filterOpenOnly">Show open cases only</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)">
+              <input id="filterHasCaOnly" type="checkbox" style="width:auto">
+              <span data-i18n="filterHasCaOnly">Has Corrective Action only</span>
+            </label>
+          </div>
+          <div style="display:flex;gap:8px">
+            <span id="masterOnlyImportExportBar"><button class="btn primary btn-sm" id="btnExportSelected" disabled>Export Selected (0)</button></span>
+            <button class="btn primary btn-sm" id="btnNewEvaluation" data-i18n="btnNewEvaluation">+ Open New Evaluation</button>
+            <button class="btn ghost btn-sm" id="btnCaNew" data-i18n="caNew">+ New Corrective Action</button>
+          </div>
+        </div>
+        <div id="evalTable" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <!-- ---------- CORRECTIVE ACTIONS ---------- -->
+    <section id="ca" class="view">
+      <div class="panel" id="caFormPanel">
+        <div class="panel-head" style="justify-content:flex-end">
+          <button class="btn ghost" id="btnCaBackToList" data-i18n="backToEvalList">&larr; Back to Evaluation List</button>
+        </div>
+        <p class="hint" data-i18n="caHint">Grade C/D evaluations auto-create a Corrective Action requirement (due 5 working days after approval).</p>
+
+        <div class="form-grid">
+          <div class="field" style="grid-column:1/-1">
+            <label data-i18n="caEvalPick">Evaluation</label>
+            <div class="filter-row" style="margin-bottom:8px">
+              <input id="ca_ev_filter_supplier" data-i18n-ph="filterTextPh" placeholder="Search supplier / code">
+              <input id="ca_ev_filter_year" type="number" data-i18n-ph="filterYearPh" placeholder="Year">
+              <select id="ca_ev_filter_month">
+                <option value="" data-i18n="allMonths">All Months</option>
+                <option value="1" data-i18n="monthJan">Jan</option><option value="2" data-i18n="monthFeb">Feb</option><option value="3" data-i18n="monthMar">Mar</option><option value="4" data-i18n="monthApr">Apr</option><option value="5" data-i18n="monthMay">May</option><option value="6" data-i18n="monthJun">Jun</option><option value="7" data-i18n="monthJul">Jul</option><option value="8" data-i18n="monthAug">Aug</option><option value="9" data-i18n="monthSep">Sep</option><option value="10" data-i18n="monthOct">Oct</option><option value="11" data-i18n="monthNov">Nov</option><option value="12" data-i18n="monthDec">Dec</option>
+              </select>
+            </div>
+            <div class="field" style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <input id="ca_ev_filter_allgrades" type="checkbox" style="width:auto">
+              <label for="ca_ev_filter_allgrades" style="margin:0;font-weight:400" data-i18n="caShowAllGrades">Show all grades (default: Grade C/D only)</label>
+            </div>
+            <select id="ca_evaluation"></select>
+          </div>
+        </div>
+
+        <div id="caSetsContainer"></div>
+        <div class="actions-row" style="margin-top:4px">
+          <button class="btn ghost" type="button" id="btnCaAddSet" data-i18n="caAddSet">+ Add another problem</button>
+        </div>
+
+        <div class="actions-row" style="margin-top:16px">
+          <button class="btn primary" id="btnCaSave" data-i18n="caSave">Save Corrective Action</button>
+          <button class="btn ghost" id="btnCaReset" data-i18n="caReset">Clear Form</button>
+          <button class="btn primary" id="btnCaMarkReceived" data-i18n="caMarkReceived">Mark Received Countermeasure</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- SUPPLIER PROFILE ---------- -->
+    <section id="profile" class="view">
+      <div class="panel">
+        <div class="filter-row">
+          <div class="field"><label data-i18n="profileGroupLabel">Group (by Code)</label>
+            <select id="profileGroup"><option value="" data-i18n="allCategories">All Categories</option></select>
+          </div>
+          <div class="field"><label data-i18n="selectSupplier">Select Supplier</label><select id="profileSupplier"></select></div>
+        </div>
+
+        <div class="subtabs">
+          <button class="subtab active" data-profiletab="overview" data-i18n="profileOverviewTab">Overview</button>
+          <button class="subtab" data-profiletab="evaluation" data-i18n="profileEvalTab">Evaluation</button>
+          <button class="subtab" data-profiletab="audit" data-i18n="profileAuditTab">Audit</button>
+          <button class="subtab" data-profiletab="ca" data-i18n="caTab">Corrective Action</button>
+          <button class="subtab" data-profiletab="contacts" data-i18n="profileContactsTab">Documents &amp; Contacts</button>
+        </div>
+
+        <div id="profileTabOverview">
+          <div id="profileInfo" class="profile-info"></div>
+        </div>
+
+        <div id="profileTabEvaluation" style="display:none">
+          <div class="two-col">
+            <div class="panel">
+              <h4 style="margin-top:0" data-i18n="profileEvalHistory">Evaluation History</h4>
+              <div id="profileHistoryZone"></div>
+            </div>
+            <div class="panel">
+              <h2 data-i18n="trend">12-Month Trend</h2>
+              <div class="canvas-wrap"><canvas id="trendChart"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="profileTabAudit" style="display:none">
+          <div class="mock-preview-banner">
+            <b>🔧 <span data-i18n="mockPreviewTitle">Preview — not a working feature yet</span></b>
+            <p data-i18n="mockAuditHint">Concept for the future Supplier Audit system (FM-0704-5, 20 categories). Sample data shown below to illustrate the idea — nothing here is real or saved.</p>
+          </div>
+          <table>
+            <tr><th data-i18n="mockAuditDate">Date</th><th data-i18n="mockAuditor">Auditor</th><th data-i18n="mockAuditScore">Score</th><th data-i18n="mockAuditGrade">Grade</th></tr>
+            <tr><td>26/Jul/24</td><td>Seishi Uehira</td><td class="num">94.29%</td><td><span class="badge A">A</span></td></tr>
+            <tr class="muted-small"><td colspan="4" data-i18n="mockAuditMore">(sample row only — real audit history will appear here once this system is built)</td></tr>
+          </table>
+        </div>
+
+        <div id="profileTabCa" style="display:none">
+          <div id="profileCaList" class="table-wrap"></div>
+        </div>
+
+        <div id="profileTabContacts" style="display:none">
+          <div class="mock-preview-banner">
+            <b>🔧 <span data-i18n="mockPreviewTitle">Preview — not a working feature yet</span></b>
+            <p data-i18n="mockContactsHint">Concept for multi-contact and certification tracking (ISO/CQI with expiry dates), based on the real Approved Supplier List format. Sample data shown below — nothing here is real or saved.</p>
+          </div>
+          <table>
+            <tr><th data-i18n="mockContactName">Name</th><th data-i18n="mockContactRole">Role</th><th>Email</th><th>Mobile</th></tr>
+            <tr><td>Mr. Ryuya Shinden</td><td class="muted-small" data-i18n="mockSample">(sample)</td><td>r-shinden@example.co.jp</td><td>-</td></tr>
+          </table>
+          <h4 data-i18n="mockCerts">Certifications</h4>
+          <table>
+            <tr><th data-i18n="mockCertStandard">Standard</th><th data-i18n="mockCertExpiry">Valid Until</th></tr>
+            <tr><td>ISO9001:2015</td><td class="muted-small" data-i18n="mockSample">(sample)</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- REPORT PREVIEW ---------- -->
+    <section id="report" class="view">
+      <div class="panel">
+        <div class="subtabs" style="max-width:400px">
+          <button class="subtab active" data-reporttab="single" data-i18n="reportSingleTab">Single Evaluation</button>
+          <button class="subtab" data-reporttab="yearly" data-i18n="yearlySummary">Yearly Summary</button>
+        </div>
+
+        <div id="reportSingle">
+          <div class="filter-row">
+            <div class="field"><label data-i18n="mCategory">Category</label><select id="rp_category"><option value="" data-i18n="allCategories">All Categories</option></select></div>
+            <div class="field"><label data-i18n="supplier">Supplier</label><select id="rp_supplier"></select></div>
+            <div class="field"><label data-i18n="year">Year</label><select id="rp_year"></select></div>
+            <div class="field"><label data-i18n="month">Month</label><select id="reportSelect"></select></div>
+          </div>
+          <div id="reportBox" class="report-sheet"></div>
+          <div class="actions-row">
+            <button class="btn primary" id="btnPrint" data-i18n="printPdf">Print / Save as PDF</button>
+          </div>
+        </div>
+
+        <div id="reportYearly" style="display:none">
+          <div class="form-grid">
+            <div class="field"><label data-i18n="year">Year</label><input id="ys_year" type="number" value="2026"></div>
+            <div class="field"><label data-i18n="mCategory">Category</label>
+              <select id="ys_category"><option value="" data-i18n="allCategories">All Categories</option></select>
+            </div>
+          </div>
+          <div class="actions-row" style="margin-bottom:16px">
+            <button class="btn ghost" id="btnYearlyRefresh" data-i18n="refresh">Refresh</button>
+            <button class="btn ghost" id="btnYearlyPrint" data-i18n="printPdf">Print / Save as PDF</button>
+          </div>
+          <div id="yearlySummaryTable" class="table-wrap"></div>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ---------- SETUP & STATUS ---------- -->
+    <section id="setting" class="view">
+      <div class="subtabs">
+        <button class="subtab active" data-settingtab="status" data-i18n="settingStatusTab">Setup &amp; Status</button>
+        <button class="subtab" id="settingTabMaster" data-settingtab="master" data-i18n="masterControl">Master Control</button>
+        <button class="subtab" id="settingTabIE" data-settingtab="importexport" data-i18n="importExport">Import / Export</button>
+        <button class="subtab" data-settingtab="activitylog" data-i18n="mActivityLog">Activity Log</button>
+        <button class="subtab" id="settingTabTranslation" data-settingtab="translation" data-i18n="translationTab">Translation</button>
+      </div>
+
+        <div id="settingStatus">
+          <div class="two-col">
+            <div class="panel">
+              <h2 data-i18n="working">Working in this phase</h2>
+              <ul class="check-list">
+                <li data-i18n="w1">Live read/write to Supabase (suppliers, evaluations)</li>
+                <li data-i18n="w2">Total score and grade computed by the database</li>
+                <li data-i18n="w3">Dashboard KPIs and charts from real data</li>
+                <li data-i18n="w4">Supplier profile with 12-month trend</li>
+                <li data-i18n="w5">EN / TH toggle</li>
+                <li data-i18n="w6">Login with email/password (Supabase Auth)</li>
+                <li data-i18n="w7">Department roles — QA / CS / MP / CS Supervisor / Admin</li>
+                <li data-i18n="w8">Itemized checklist auto-scoring (Official Worksheet)</li>
+                <li data-i18n="w9">Submit → Approve workflow, Corrective Action, attachments</li>
+                <li data-i18n="w10">Dynamic, admin-editable permissions (Master Control → Permissions)</li>
+                <li data-i18n="w11">Bulk "Open Monthly Cycle" for all active suppliers</li>
+              </ul>
+            </div>
+            <div class="panel">
+              <h2 data-i18n="nextStep">Not yet — later phases</h2>
+              <ul class="check-list muted">
+                <li data-i18n="n1">Full auto-send email / supplier acknowledgment portal — currently: staff attach the PDF and click Mark Sent, which closes the case automatically for grade A/B or via the Corrective Action for grade C/D</li>
+                <li data-i18n="n2">Pilot rollout replacing Excel (Phase 8 — process work, not code)</li>
+                <li data-i18n="n3">Dashboard's cycle-coverage numbers still derived from evaluations directly, not yet reading evaluation_cycles</li>
+              </ul>
+            </div>
+          </div>
+          <div class="panel">
+            <h2 data-i18n="connSetup">Supabase connection</h2>
+            <p class="hint" data-i18n="connHint">Set your project URL and anon key at the top of app.js, then reload this page.</p>
+            <pre class="code-block">window.APP_CONFIG = {
+  SUPABASE_URL: 'https://YOUR-PROJECT.supabase.co',
+  SUPABASE_ANON_KEY: 'YOUR-ANON-KEY'
+};  // ไฟล์ config.js</pre>
+            <p class="hint" data-i18n="rlsHint" style="margin-top:14px">Also run phase2_auth_and_roles.sql in the Supabase SQL editor so login and department permissions work.</p>
+          </div>
+        </div>
+
+        <div id="settingMaster" style="display:none">
+      <div class="panel">
+        <p class="hint" data-i18n="masterHint">Manage suppliers, evaluation criteria, and user roles. Admin only — enforced by the database, not just this screen.</p>
+
+        <div class="subtabs">
+          <button class="subtab active" data-mastertab="suppliers" data-i18n="mSuppliers">Suppliers</button>
+          <button class="subtab" data-mastertab="criteria" data-i18n="mCriteria">Evaluation Criteria</button>
+          <button class="subtab" data-mastertab="users" data-i18n="mUsers">Users &amp; Roles</button>
+          <button class="subtab" data-mastertab="permissions" data-i18n="mPermissions">Permissions</button>
+          <button class="subtab" data-mastertab="holidays" data-i18n="mHolidays">Holidays</button>
+        </div>
+
+        <!-- Suppliers -->
+        <div class="master-panel" id="masterSuppliers">
+          <div class="form-grid">
+            <div class="field"><label data-i18n="mCode">Code</label><input id="ms_code" type="text" placeholder="MA-999"></div>
+            <div class="field"><label data-i18n="mName">Name</label><input id="ms_name" type="text"></div>
+            <div class="field"><label data-i18n="mShortName">Short Name</label><input id="ms_short_name" type="text"></div>
+            <div class="field"><label data-i18n="mCategory">Group</label><input id="ms_category" type="text" readonly disabled><small class="field-hint" data-i18n="mCategoryAutoHint">Auto-detected from the code prefix (MA-/OS-/PA-) — cannot be edited directly.</small></div>
+            <div class="field"><label data-i18n="mAttention">Attention</label><input id="ms_attention" type="text"></div>
+            <div class="field"><label data-i18n="mTel">Tel</label><input id="ms_tel" type="text"></div>
+            <div class="field"><label data-i18n="mEmail">Email</label><input id="ms_email" type="email"></div>
+            <div class="field"><label data-i18n="mTargetScore">Target Score</label><input id="ms_target_score" type="number" value="80"></div>
+            <div class="field" style="display:flex;align-items:center;gap:8px">
+              <input id="ms_is_active" type="checkbox" checked style="width:auto">
+              <label for="ms_is_active" style="margin:0" data-i18n="mIsActive">Active</label>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="btn primary" id="btnSupplierSave" data-i18n="mSave">Save</button>
+            <button class="btn ghost" id="btnSupplierReset" data-i18n="mClear">Clear Form</button>
+          </div>
+          <div id="masterSupplierTable" class="table-wrap"></div>
+
+          <div class="panel" id="cycleOpenerPanel" style="margin-top:20px">
+            <h2 data-i18n="openCycleTitle">Open Monthly Cycle</h2>
+            <p class="hint" data-i18n="openCycleHint">Creates a draft evaluation for every active supplier that doesn't already have one for the month you pick, so each department finds it waiting instead of creating it from scratch. Safe to run again — never touches an evaluation that already exists.</p>
+            <div class="form-grid">
+              <div class="field"><label data-i18n="year">Year</label><input id="oc_year" type="number" value="2026"></div>
+              <div class="field"><label data-i18n="month">Month</label><select id="oc_month">
+                <option value="1" data-i18n="monthJan">Jan</option><option value="2" data-i18n="monthFeb">Feb</option><option value="3" data-i18n="monthMar">Mar</option><option value="4" data-i18n="monthApr">Apr</option><option value="5" data-i18n="monthMay">May</option><option value="6" data-i18n="monthJun">Jun</option><option value="7" data-i18n="monthJul">Jul</option><option value="8" data-i18n="monthAug">Aug</option><option value="9" data-i18n="monthSep">Sep</option><option value="10" data-i18n="monthOct">Oct</option><option value="11" data-i18n="monthNov">Nov</option><option value="12" data-i18n="monthDec">Dec</option>
+              </select></div>
+            </div>
+            <div class="actions-row">
+              <button class="btn primary" id="btnOpenCycle" data-i18n="openCycleBtn">Open Cycle</button>
+            </div>
+            <p class="hint" id="openCycleResult"></p>
+          </div>
+        </div>
+
+        <!-- Evaluation Criteria -->
+        <div class="master-panel" id="masterCriteria" style="display:none">
+          <div class="form-grid">
+            <div class="field">
+              <label data-i18n="mCriteriaCategory">Category</label>
+              <select id="mc_category">
+                <option value="quality" data-i18n="catQuality">Quality</option>
+                <option value="delivery" data-i18n="catDelivery">Delivery</option>
+                <option value="purchase" data-i18n="catPurchase">Purchase</option>
+              </select>
+            </div>
+            <div class="field"><label data-i18n="mItemNo">Item No.</label><input id="mc_item_no" type="text" placeholder="A1-10"></div>
+            <div class="field" style="grid-column:span 2"><label data-i18n="mDescription">Description (EN)</label><input id="mc_description" type="text"></div>
+            <div class="field" style="grid-column:span 2"><label data-i18n="mDescriptionTh">Description (TH)</label><input id="mc_description_th" type="text"></div>
+            <div class="field"><label data-i18n="mFullScore">Full Score (header row only)</label><input id="mc_full_score" type="number" placeholder="leave blank if not a header row"></div>
+            <div class="field"><label data-i18n="mDeduction">Deduction/Credit Points</label><input id="mc_deduction" type="number" placeholder="-10 or +10"></div>
+            <div class="field"><label data-i18n="mDisplayOrder">Display Order</label><input id="mc_display_order" type="number" value="0"></div>
+            <div class="field" style="display:flex;align-items:center;gap:8px">
+              <input id="mc_is_active" type="checkbox" checked style="width:auto">
+              <label for="mc_is_active" style="margin:0" data-i18n="mIsActive">Active</label>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="btn primary" id="btnCriteriaSave" data-i18n="mSave">Save</button>
+            <button class="btn ghost" id="btnCriteriaReset" data-i18n="mClear">Clear Form</button>
+          </div>
+          <div id="masterCriteriaTable" class="table-wrap"></div>
+        </div>
+
+        <!-- Users & Roles -->
+        <div class="master-panel" id="masterUsers" style="display:none">
+          <p class="hint" data-i18n="mUsersHint">Create new accounts below, or change an existing user's department/role in the table.</p>
+          <div class="form-grid">
+            <div class="field"><label data-i18n="mNewUserId">User ID</label><input id="nu_userid" type="text" placeholder="qa02" autocomplete="off"></div>
+            <div class="field"><label data-i18n="mNewUserPassword">Temporary Password</label><input id="nu_password" type="text" placeholder="min 6 characters" autocomplete="off"></div>
+            <div class="field"><label data-i18n="mNewUserName">Full Name</label><input id="nu_fullname" type="text"></div>
+            <div class="field"><label data-i18n="mNewUserDept">Department</label>
+              <select id="nu_department">
+                <option value="qa">QA</option><option value="cs">CS</option><option value="mp">MP</option>
+                <option value="cs_supervisor">CS Supervisor</option><option value="mp_supervisor">MP Supervisor</option>
+                <option value="opd_manager">OPD Manager</option><option value="admin">Admin</option>
+              </select>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="btn primary" id="btnCreateUser" data-i18n="mCreateUser">Create Account</button>
+          </div>
+          <p class="hint" id="createUserResult"></p>
+          <div id="masterUsersTable" class="table-wrap"></div>
+        </div>
+
+        <!-- Permissions (reference — enforced by the database, not editable from this screen) -->
+        <div class="master-panel" id="masterPermissions" style="display:none">
+          <p class="hint" data-i18n="mPermissionsHint">Toggle a checkbox to change what that department can do — takes effect immediately, enforced by the database itself (not just this screen). Be careful: removing your own department's permission here can lock you out of an action until another admin restores it.</p>
+          <p class="hint" id="permSaveStatus" style="min-height:18px"></p>
+          <div id="masterPermissionsTable" class="table-wrap"></div>
+        </div>
+
+        <!-- Holidays -->
+        <div class="master-panel" id="masterHolidays" style="display:none">
+          <p class="hint" data-i18n="mHolidaysHint">Excluded from the Corrective Action "5 working days" due-date calculation, along with weekends. 2026 is pre-loaded with Thailand's official public holidays — add more (company-specific days off, future years) as needed.</p>
+          <div class="form-grid">
+            <div class="field"><label data-i18n="mHolidayDate">Date</label><input id="mh_date" type="date"></div>
+            <div class="field" style="grid-column:span 2"><label data-i18n="mDescription">Name (EN)</label><input id="mh_name" type="text"></div>
+            <div class="field" style="grid-column:span 2"><label data-i18n="mDescriptionTh">Name (TH)</label><input id="mh_name_th" type="text"></div>
+          </div>
+          <div class="actions-row">
+            <button class="btn primary" id="btnHolidaySave" data-i18n="mSave">Save</button>
+            <button class="btn ghost" id="btnHolidayReset" data-i18n="mClear">Clear Form</button>
+          </div>
+          <div id="masterHolidaysTable" class="table-wrap"></div>
+        </div>
+
+      </div>
+        </div>
+
+        <div id="settingImportExport" style="display:none">
+      <div class="panel">
+        <h2 data-i18n="ieImportTitle">Import from Excel</h2>
+        <p class="hint" data-i18n="ieImportHint">Upload one or more monthly FM0704-3 evaluation files. Every supplier sheet is parsed and matched to an existing supplier where possible — nothing is written until you review the preview below and confirm.</p>
+        <input type="file" id="ie_file_input" accept=".xlsx" multiple>
+        <div class="actions-row" style="margin-top:10px">
+          <button class="btn primary" id="btnParseImportFiles" data-i18n="ieParse">Parse Files</button>
+        </div>
+        <p class="hint" id="ieParseStatus"></p>
+        <div id="ieImportPreview"></div>
+        <div class="actions-row" id="ieConfirmRow" style="display:none;margin-top:10px">
+          <button class="btn primary" id="btnConfirmImport" data-i18n="ieConfirmImport">Confirm Import</button>
+          <span class="hint" id="ieImportResult"></span>
+        </div>
+      </div>
+      <div class="panel">
+        <h2 data-i18n="ieExportTitle">Export to Excel</h2>
+        <p class="hint" data-i18n="ieExportHint">Exporting works from the Evaluation List — tick the suppliers/months you want (only itemized evaluations can be exported), then click "Export Selected" there.</p>
+        <button class="btn ghost" id="btnGoToListForExport" data-i18n="goToListForExport">Go to Evaluation List &rarr;</button>
+      </div>
+        </div>
+
+        <div id="settingActivityLog" style="display:none">
+      <div class="panel">
+        <p class="hint" data-i18n="mActivityLogHint">Everyone can view. Only Admin can revert — and only insert/delete actions, and updates that didn't change a workflow status (Submit/Approve/Reject/Close are visible here but never revertible).</p>
+        <div class="filter-row">
+          <select id="alFilterTable">
+            <option value="" data-i18n="allTables">All tables</option>
+            <option value="evaluations">Evaluations</option>
+            <option value="corrective_actions">Corrective Actions</option>
+            <option value="suppliers">Suppliers</option>
+            <option value="evaluation_criteria">Evaluation Criteria</option>
+            <option value="permission_rules">Permissions</option>
+            <option value="user_profiles">Users</option>
+          </select>
+          <select id="alFilterAction">
+            <option value="" data-i18n="allActions">All actions</option>
+            <option value="insert" data-i18n="alInsert">Created</option>
+            <option value="update" data-i18n="alUpdate">Updated</option>
+            <option value="delete" data-i18n="alDelete">Deleted</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)">
+            <input id="alRevertableOnly" type="checkbox" style="width:auto">
+            <span data-i18n="alRevertableOnly">Revertible only</span>
+          </label>
+          <button class="btn ghost" id="btnActivityLogRefresh" data-i18n="refresh">Refresh</button>
+        </div>
+        <div id="masterActivityLogTable" class="table-wrap"></div>
+      </div>
+        </div>
+
+        <div id="settingTranslation" style="display:none">
+          <div class="panel">
+            <p class="hint" data-i18n="translationHint">Override how any label is shown, in either language — useful for loanwords/technical terms you want spelled a certain way. Admin only. Edit a field directly below, then Save — leave it matching the default to not override it.</p>
+            <div class="actions-row" style="margin:12px 0">
+              <select id="tr_category" style="max-width:260px"></select>
+              <input id="tr_search" data-i18n-ph="translationSearchPh" placeholder="Search all categories…" style="flex:1;min-width:160px">
+              <button class="btn primary" id="btnTranslationSaveAll" data-i18n="translationSaveAll" style="margin-left:auto">Save Changes</button>
+            </div>
+            <div id="translationTableWrap" class="table-wrap"></div>
+          </div>
+        </div>
+    </section>
+
+  </main>
+</div>
+
+<script src="config.js"></script>
+<script src="vendor/supabase.js"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
