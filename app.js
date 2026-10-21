@@ -276,6 +276,10 @@ const TH = {
   qaLocked:'บทบาท QA แก้ไขได้เฉพาะคะแนน/หมายเหตุด้านคุณภาพ',
   csmpLocked:'บทบาท CS/MP แก้ไขได้เฉพาะคะแนน/หมายเหตุด้านจัดส่งและยอดซื้อ',
   approveLocked:'เฉพาะ Admin เท่านั้นที่เลือกสถานะ "อนุมัติแล้ว" ได้',
+  navGroupWork:'งานประจำ', navGroupData:'ข้อมูลและรายงาน', navGroupAdmin:'ระบบ',
+  dashPrint:'พิมพ์ / ส่งออก', dashGradeMix:'การกระจายเกรด', dashWatchHint:'เส้นสี = Supplier · เส้นประ = ค่าเฉลี่ยทุกราย · ย้อนหลัง 12 เดือน',
+  dashOverviewTitle:'ภาพรวมย้อนหลัง', dashIssueParetoHint2:'ย้อนหลัง 12 เดือน · ลูกศร = เทียบเดือนก่อน',
+  segTotal:'รวม', segQuality:'Quality', segDelivery:'Delivery', segPurchase:'Purchase', segCount:'จำนวนครั้ง', segPoints:'คะแนนที่ถูกหัก',
 };
 
 Object.assign(TH, {
@@ -832,7 +836,7 @@ async function loadSuppliers(){
 async function loadEvaluations(){
   const { data, error } = await sb
     .from('evaluations')
-    .select('id, year, month, quality_score, delivery_score, purchase_score, total_score, grade, quality_comment, delivery_comment, status, shipment_status, no_shipment_reason, raw_score, applicable_weight, scoring_mode, quality_submitted_at, delivery_submitted_at, sent_at, acknowledged_at, rejection_reason, rejected_at, supplier:suppliers(id,code,name,short_name,attention,tel,category,is_active,target_score)')
+    .select('id, year, month, quality_score, delivery_score, purchase_score, total_score, grade, quality_comment, delivery_comment, status, shipment_status, no_shipment_reason, raw_score, applicable_weight, scoring_mode, quality_submitted_at, delivery_submitted_at, sent_at, acknowledged_at, rejection_reason, rejected_at, sup_approved_at, mgr_approved_at, supplier:suppliers(id,code,name,short_name,attention,tel,category,is_active,target_score)')
     .order('year', { ascending:false })
     .order('month', { ascending:false });
   if (error) { console.error(error); showBanner('Load evaluations failed: ' + error.message); return; }
@@ -921,6 +925,30 @@ function updateLoadingProgress(done, total, label){
   if (txt) txt.textContent = `${label} (${done}/${total})`;
 }
 
+// Opens this month's cycle automatically (creates draft evaluations for
+// every active supplier that has none yet). Runs at most once per page
+// load, only when something is actually missing, and never blocks the app:
+// if database/35_auto_open_current_cycle.sql has not been run yet, or the
+// call fails for any reason, it just logs and carries on.
+let autoCycleTried = false;
+async function autoOpenCurrentCycle(){
+  if (autoCycleTried) return;
+  autoCycleTried = true;
+  try {
+    const now = bangkokToday();
+    const opened = new Set(evaluations.filter(e => e.year === now.y && e.month === now.m).map(e => e.supplier?.id));
+    const missing = allSuppliers.filter(s => s.is_active !== false && !opened.has(s.id));
+    if (!missing.length) return;
+    const { data, error } = await sb.rpc('ensure_current_cycle');
+    if (error) { console.warn('ensure_current_cycle unavailable (run database/35_auto_open_current_cycle.sql):', error.message); return; }
+    const row = Array.isArray(data) ? data[0] : data;
+    if (row && row.created_count > 0) {
+      await loadEvaluations();
+      console.info(`ensure_current_cycle created ${row.created_count} evaluation(s) for ${now.y}-${now.m}`);
+    }
+  } catch (err) { console.warn('autoOpenCurrentCycle failed:', err); }
+}
+
 async function reloadAll(){
   showLoadingOverlay();
   const ok = await checkConnection();
@@ -948,6 +976,7 @@ async function reloadAll(){
   }
   updateLoadingProgress(steps.length, steps.length, lang==='th' ? 'เสร็จสิ้น' : 'Done');
 
+  await autoOpenCurrentCycle();
   renderAll();
   hideLoadingOverlay();
 }
@@ -977,7 +1006,7 @@ function showTab(tab){
   // visible, since nothing else re-triggers a redraw. requestAnimationFrame
   // guarantees a redraw happens after the browser has actually painted
   // this tab as visible, so the canvas has real dimensions to draw into.
-  if (tab === 'dashboard') requestAnimationFrame(() => { renderRiskMatrix(dashboardEvaluations()); renderPerformanceTrend(dashboardEvaluations()); });
+  if (tab === 'dashboard') requestAnimationFrame(() => { renderPerformanceTrend(); });
   if (tab === 'profile') requestAnimationFrame(renderProfile);
 }
 
@@ -3336,12 +3365,20 @@ function dashboardEvaluations(){
     return true;
   });
 }
-function supplierHistory(e){ return evaluations.filter(x=>x.supplier?.id===e.supplier?.id).sort((a,b)=>a.year-b.year||a.month-b.month); }
+// An evaluation only counts toward scores/risk/trends once BOTH sections
+// (Quality and Delivery/Purchase) have been submitted. Freshly opened
+// drafts carry placeholder scores and must not distort averages.
+function isEvalComplete(e){ return !!(e && e.quality_submitted_at && e.delivery_submitted_at); }
+function supplierHistory(e){ return evaluations.filter(x=>x.supplier?.id===e.supplier?.id && isEvalComplete(x)).sort((a,b)=>a.year-b.year||a.month-b.month); }
 function scoreDelta(e){ const h=supplierHistory(e), i=h.findIndex(x=>x.id===e.id); return i>0?toNum(e.total_score)-toNum(h[i-1].total_score):0; }
 function declining(e){ const h=supplierHistory(e).filter(x=>x.year<e.year||(x.year===e.year&&x.month<=e.month)); if(h.length<3)return false; const a=h.slice(-3).map(x=>toNum(x.total_score)); return a[0]>a[1]&&a[1]>a[2]; }
 function caForEval(e){ return correctiveActions.filter(c=>c.evaluation?.id===e.id); }
 function supplierRisk(e){
   let r=0, delta=scoreDelta(e), cas=caForEval(e);
+  if(!isEvalComplete(e)){ // unfinished draft: only corrective-action signals, never its placeholder score
+    if(cas.some(isCaOverdue)) r+=30; else if(cas.some(c=>c.status!=='closed')) r+=12;
+    return Math.min(100,r);
+  }
   if(toNum(e.total_score)<80) r+=30; else if(toNum(e.total_score)<90) r+=12;
   if(delta<=-5) r+=18; else if(delta<0) r+=8;
   if(declining(e)) r+=18;
@@ -3371,7 +3408,7 @@ function startNewEvaluationFor(supplierId, year, month){
 }
 
 function renderActionBoard(){
-  if (!document.getElementById('actionColQaList')) return;
+  if (!document.getElementById('actionTabs')) return;
   const today = new Date();
   const curYear = today.getFullYear(), curMonth = today.getMonth()+1;
 
@@ -3501,10 +3538,13 @@ function renderActionBoard(){
   const canSupApprove = hasPerm('eval_sup_approve');
   const canMgrApprove = hasPerm('eval_mgr_approve');
 
-  renderActionColumnSimple('actionColQaList', qaItems, canEditQuality);
-  renderActionColumnSimple('actionColCsMpList', csItems, canEditDelivery);
-  renderActionColumnSimple('actionColSupList', supItems, canSupApprove);
-  renderActionColumnSimple('actionColMgrList', mgrItems, canMgrApprove);
+  actionBoardData = [
+    { key:'cs',  label:'CS / MP',    items: csItems,  mine: canEditDelivery },
+    { key:'qa',  label:'QA',         items: qaItems,  mine: canEditQuality },
+    { key:'sup', label:'Supervisor', items: supItems, mine: canSupApprove },
+    { key:'mgr', label:'Manager',    items: mgrItems, mine: canMgrApprove },
+  ];
+  renderActionTabs();
 }
 
 function renderActionColumnSimple(elId, items, mine){
@@ -3532,129 +3572,28 @@ function renderActionColumnSimple(elId, items, mine){
 }
 
 
-function renderDashboardCommandCenter(){
-  renderActionBoard();
-  const arr=dashboardEvaluations(), cas=dashboardCa();
-  const activeInScope=allSuppliers.filter(s=>s.is_active!==false && (!document.getElementById('dashCategory').value||s.category===document.getElementById('dashCategory').value)).length||suppliers.length;
-  const complete=arr.filter(e=>['mgr_approved','sent_to_supplier','acknowledged'].includes(e.status)).length;
-  const avg=arr.length?arr.reduce((s,e)=>s+toNum(e.total_score),0)/arr.length:0;
-  const below=arr.filter(e=>toNum(e.total_score)<(allSuppliers.find(s=>s.id===e.supplier?.id)?.target_score||80)).length;
-  const high=arr.filter(e=>supplierRisk(e)>=60).length;
-  const noShip=arr.filter(e=>e.shipment_status==='no_shipment').length;
-  const openCa=cas.filter(c=>c.status!=='closed').length, overdue=cas.filter(isCaOverdue).length;
-  const qaPending=arr.filter(e=>!e.quality_submitted_at).length, delPending=arr.filter(e=>!e.delivery_submitted_at).length;
-  const ready=arr.filter(e=>e.quality_submitted_at&&e.delivery_submitted_at&&!['sup_approved','mgr_approved','sent_to_supplier','acknowledged'].includes(e.status)).length;
-  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v};
-  const setHtml=(id,v)=>{const el=document.getElementById(id);if(el)el.innerHTML=v};
-  set('kpiCompletion',`${activeInScope?Math.round(arr.length/activeInScope*100):0}%`); set('kpiCompletionSub',`${arr.length} / ${activeInScope} suppliers`);
-  setHtml('kpiAvg',scoreNum(avg)); set('kpiAvgDelta',`${arr.length} ${L('evaluated records','รายการที่ประเมินแล้ว')}`); set('kpiRisk',below); set('kpiHighRisk',high); set('kpiOpenCa',openCa); set('kpiCaSub',`${overdue} ${L('overdue','เกินกำหนด')}`); set('kpiNoShipment',noShip);
-  set('actQa',qaPending);set('actDelivery',delPending);set('actApproval',ready);set('actCa',overdue);
-  renderCyclePipeline(arr,activeInScope); renderPriorityQueue(arr,cas); renderRiskMatrix(arr); renderPerformanceTrend(arr); renderIssuePareto(arr);
+/* ============================================================
+   Dashboard v92 — month header, role tabs, 4 tiles, cycle health,
+   watch list (sparklines), collapsible history overview.
+   All score-based numbers count only COMPLETED evaluations
+   (both sections submitted) — see isEvalComplete().
+   ============================================================ */
+const MONTHS_FULL_EN=['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTHS_FULL_TH=['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+function monthFull(m){ return (lang==='th'?MONTHS_FULL_TH:MONTHS_FULL_EN)[(m||1)-1] || ''; }
+function bangkokToday(){
+  const p=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+  const g=k=>parseInt(p.find(x=>x.type===k).value,10);
+  return {y:g('year'),m:g('month'),d:g('day')};
 }
-function renderCyclePipeline(arr,total){
-  const rows=[[L('Not started','ยังไม่เริ่ม'),Math.max(0,total-arr.length),'warn'],[L('QA submitted','QA ส่งแล้ว'),arr.filter(e=>e.quality_submitted_at).length,''],[L('CS/MP submitted','CS/MP ส่งแล้ว'),arr.filter(e=>e.delivery_submitted_at).length,''],[L('Ready for approval','พร้อมอนุมัติ'),arr.filter(e=>e.quality_submitted_at&&e.delivery_submitted_at&&!['sup_approved','mgr_approved','sent_to_supplier','acknowledged'].includes(e.status)).length,''],[L('Approved / closed','อนุมัติ / ปิดแล้ว'),arr.filter(e=>['mgr_approved','sent_to_supplier','acknowledged'].includes(e.status)).length,'good']];
-  document.getElementById('cycleHealthPct').textContent=`${total?Math.round(rows[4][1]/total*100):0}%`;
-  document.getElementById('cyclePipeline').innerHTML=rows.map(([l,n,c])=>`<div class="pipe-row"><span class="pipe-label">${l}</span><div class="pipe-track"><div class="pipe-fill ${c}" style="width:${total?n/total*100:0}%"></div></div><span class="pipe-num">${n}</span></div>`).join('');
+function dashPeriodKeys(){ // ascending, only periods that have evaluations
+  const sel=document.getElementById('dashPeriod'); if(!sel) return [];
+  return [...sel.options].map(o=>o.value).filter(Boolean).sort();
 }
-// Priority (risk-score based, threshold >=35 on the 0-100 risk index) and
-// Early Warning (trend-based: 3-period decline, a big single-period drop,
-// or an overdue CA) used to be two separate widgets that frequently
-// flagged the same suppliers for the same reasons — merged into one list,
-// each row tagged with which signal(s) fired, sorted by risk score.
-function renderPriorityQueue(arr,cas){
-  const rows=[];
-  arr.forEach(e=>{
-    const r=supplierRisk(e);
-    const overdueCa=caForEval(e).find(isCaOverdue);
-    const isDeclining=declining(e);
-    const delta=scoreDelta(e);
-    const isPriority=r>=35;
-    const isWarning=isDeclining||delta<=-5||!!overdueCa;
-    if(!isPriority && !isWarning) return;
-
-    const reasons=[];
-    if(overdueCa) reasons.push(L('Corrective action overdue','Corrective Action เกินกำหนด'));
-    if(isDeclining) reasons.push(L('Score declined 3 periods','คะแนนลดลง 3 รอบติดต่อกัน'));
-    else if(delta<=-5) reasons.push(`${L('Score dropped','คะแนนลดลง')} ${Math.abs(delta).toFixed(1)} ${L('points','คะแนน')}`);
-    if(isPriority && !reasons.length) reasons.push(toNum(e.total_score)<80?L('Below target','ต่ำกว่าเป้าหมาย'):L('Workflow or data risk','ความเสี่ยงด้าน Workflow หรือข้อมูล'));
-
-    rows.push({e,r,isPriority,isWarning,reason:reasons[0]||''});
-  });
-  rows.sort((a,b)=>b.r-a.r);
-  const el=document.getElementById('priorityQueue');
-  el.innerHTML=rows.length?rows.slice(0,3).map(x=>`<div class="priority-item">
-    <span class="priority-dot ${riskBand(x.r)}"></span>
-    <div class="priority-main">
-      <b>${x.e.supplier?.code||''} · ${x.e.supplier?.short_name||x.e.supplier?.name||''}</b>
-      <span>${x.reason}</span>
-      <span class="tag-row">${x.isPriority?`<span class="badge status">${L('Priority','เร่งด่วน')}</span>`:''}${x.isWarning?`<span class="badge status">${L('Early Warning','เตือนล่วงหน้า')}</span>`:''}</span>
-    </div>
-    <button class="row-btn" onclick="editEvaluation('${x.e.id}')">${riskBandLabel(riskBand(x.r))}</button>
-  </div>`).join(''):`<div class="empty-note">${L('No priority or early-warning signal in this view','ไม่พบสัญญาณเร่งด่วนหรือเตือนล่วงหน้าในมุมมองนี้')}</div>`;
-  const viewAllBtn = document.getElementById('btnViewAllRisk');
-  if (viewAllBtn) {
-    viewAllBtn.style.display = rows.length > 3 ? 'inline-block' : 'none';
-    viewAllBtn.textContent = `${L('View all','ดูทั้งหมด')} (${rows.length})`;
-  }
+function setDashPeriod(key){
+  const sel=document.getElementById('dashPeriod'); if(!sel||!key) return;
+  sel.value=key; refreshDashboard();
 }
-function renderRiskMatrix(arr){
-  const c=document.getElementById('riskMatrix');if(!c)return;const ctx=c.getContext('2d'),dpr=devicePixelRatio||1,W=c.clientWidth,H=c.clientHeight;if(!W||!H)return;c.width=W*dpr;c.height=H*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,W,H);
-  riskMatrixPoints = [];
-  // Danger zones now sit in the BOTTOM 40% (low score + high risk), since
-  // the risk axis below is flipped so low risk plots near the top —
-  // good performers (high score, low risk) now cluster top-right.
-  ctx.fillStyle='#f6e7e5';ctx.fillRect(0,H*.6,W*.2,H*.4);ctx.fillStyle='#fbeedd';ctx.fillRect(W*.2,H*.6,W*.3,H*.4);ctx.strokeStyle='#d8d6ce';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(W*.2,0);ctx.lineTo(W*.2,H);ctx.moveTo(0,H*.6);ctx.lineTo(W,H*.6);ctx.stroke();ctx.setLineDash([]);
-  arr.forEach(e=>{
-    const score=Math.max(0,Math.min(100,toNum(e.total_score))),risk=supplierRisk(e),x=(score/100)*(W-30)+15,y=(risk/100)*(H-30)+15;
-    const band=riskBand(risk),color={critical:'#a23b3b',high:'#b4650a',watch:'#c99a39',low:'#0e6e66'}[band];
-    const radius=6+(caForEval(e).length*2);
-    ctx.globalAlpha=.82;ctx.beginPath();ctx.arc(x,y,radius,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.globalAlpha=1;
-    riskMatrixPoints.push({x,y,r:radius,e,score,risk,band});
-  });
-  ctx.fillStyle='#5b6470';ctx.font='10px IBM Plex Sans';ctx.fillText(L('Low performance','ผลงานต่ำ'),6,H-6);ctx.fillText(L('High performance','ผลงานสูง'),W-88,H-6);ctx.save();ctx.translate(10,H-75);ctx.rotate(-Math.PI/2);ctx.fillText(L('Higher risk','ความเสี่ยงสูงขึ้น'),0,0);ctx.restore();
-}
-// Finds the plotted dot nearest the mouse, within a small tolerance
-// around its own radius so bigger dots (more open corrective actions)
-// are proportionally easier to hit, matching how they look.
-function riskMatrixHit(mx, my){
-  let hit = null, hitDist = Infinity;
-  riskMatrixPoints.forEach(p => {
-    const d = Math.hypot(p.x - mx, p.y - my);
-    if (d <= p.r + 4 && d < hitDist) { hit = p; hitDist = d; }
-  });
-  return hit;
-}
-function wireRiskMatrixTooltip(){
-  const canvas = document.getElementById('riskMatrix');
-  const tip = document.getElementById('riskMatrixTooltip');
-  if (!canvas || !tip) return;
-  canvas.addEventListener('mousemove', (ev) => {
-    const rect = canvas.getBoundingClientRect();
-    const hit = riskMatrixHit(ev.clientX - rect.left, ev.clientY - rect.top);
-    if (hit) {
-      const e = hit.e;
-      tip.innerHTML = `<b>${escapeHtml(e.supplier?.code||'')} · ${escapeHtml(e.supplier?.short_name||e.supplier?.name||'')}</b><span>${L('Score','คะแนน')} ${hit.score}% · ${riskBandLabel(hit.band)}${caForEval(e).length ? ` · ${caForEval(e).length} CA` : ''}</span>`;
-      tip.style.left = hit.x + 'px';
-      tip.style.top = hit.y + 'px';
-      tip.classList.add('visible');
-      canvas.style.cursor = 'pointer';
-    } else {
-      tip.classList.remove('visible');
-      canvas.style.cursor = 'default';
-    }
-  });
-  canvas.addEventListener('mouseleave', () => { tip.classList.remove('visible'); canvas.style.cursor='default'; });
-  canvas.addEventListener('click', (ev) => {
-    const rect = canvas.getBoundingClientRect();
-    const hit = riskMatrixHit(ev.clientX - rect.left, ev.clientY - rect.top);
-    if (hit) editEvaluation(hit.e.id);
-  });
-}
-// Same category/shipment filters as dashboardEvaluations(), but
-// deliberately WITHOUT the single-period restriction — used by the
-// 12-month trend chart and the Issue Pareto, which both need to look
-// across many periods at once rather than just the one currently
-// selected in the period dropdown.
 function dashboardTrendScope(){
   const cat=document.getElementById('dashCategory')?.value||'', ship=document.getElementById('dashShipment')?.value||'';
   return evaluations.filter(e=>{
@@ -3663,94 +3602,309 @@ function dashboardTrendScope(){
     return true;
   });
 }
+function daysSince(ts){ if(!ts) return null; const d=Math.floor((Date.now()-new Date(ts).getTime())/86400000); return d<0?0:d; }
+function mean(a){ return a.length ? a.reduce((s,x)=>s+x,0)/a.length : null; }
+function pct(sorted,p){ if(!sorted.length) return null; const i=(sorted.length-1)*p, lo=Math.floor(i), hi=Math.ceil(i); return sorted[lo]+(sorted[hi]-sorted[lo])*(i-lo); }
+
+let dashPopYear = null;
+function renderDashHead(arr, activeInScope){
+  const keys=dashPeriodKeys();
+  const cur=selectedDashPeriod();
+  const now=bangkokToday();
+  const [py,pm]= cur ? cur.split('-').map(n=>parseInt(n,10)) : [now.y, now.m];
+  document.getElementById('dashMonthText').textContent=`${monthFull(pm)} ${py}`;
+  const idx=keys.indexOf(cur);
+  document.getElementById('dashPrev').disabled = !(idx>0);
+  document.getElementById('dashNext').disabled = !(idx>=0 && idx<keys.length-1);
+  const done=arr.filter(isEvalComplete).length;
+  document.getElementById('dashSumMain').textContent=`${L('Evaluated','ประเมินเสร็จ')} ${done} / ${activeInScope} ${L('suppliers','Supplier')}`;
+  const parts=[];
+  if(py===now.y && pm===now.m){
+    const dim=new Date(now.y,now.m,0).getDate();
+    parts.push(`${L('Days left this month:','เหลือ')} ${dim-now.d} ${L('','วันของเดือนนี้')}`.trim());
+  }
+  const noShip=arr.filter(e=>e.shipment_status==='no_shipment').length;
+  if(noShip) parts.push(`${L('No shipment','ไม่มีการส่งของ')} ${noShip}`);
+  document.getElementById('dashSumSub').textContent=parts.join(' · ');
+}
+function renderMonthPopover(){
+  const pop=document.getElementById('dashMonthPop'); if(!pop) return;
+  const keys=dashPeriodKeys(); const cur=selectedDashPeriod();
+  const curY= cur ? parseInt(cur.slice(0,4),10) : bangkokToday().y;
+  if(dashPopYear==null) dashPopYear=curY;
+  const years=keys.map(k=>parseInt(k.slice(0,4),10));
+  const minY=years.length?Math.min(...years):curY, maxY=years.length?Math.max(...years):curY;
+  let cells='';
+  for(let m=1;m<=12;m++){
+    const key=`${dashPopYear}-${String(m).padStart(2,'0')}`;
+    const has=keys.includes(key);
+    cells+=`<button type="button" class="mp-cell${has?' has':' off'}${key===cur?' cur':''}" data-key="${key}" ${has?'':'disabled'}>${MONTHS[m-1]}</button>`;
+  }
+  pop.innerHTML=`<div class="mp-year"><button type="button" class="arrow-btn sm" data-yr="-1" ${dashPopYear<=minY?'disabled':''}>&#9664;</button><span>${dashPopYear}</span><button type="button" class="arrow-btn sm" data-yr="1" ${dashPopYear>=maxY?'disabled':''}>&#9654;</button></div>
+    <div class="mp-grid">${cells}</div>
+    <div class="mp-note">${L('● has evaluations · grey = none','● มีข้อมูลประเมิน · สีเทา = ยังไม่มี')}</div>
+    <button type="button" class="btn btn-sm mp-latest" data-latest="1">${L('Go to latest month','ไปเดือนล่าสุด')}</button>`;
+}
+
+/* ---- Action board (tabs) ---- */
+let actionBoardData = null, actionTabSel = null;
+const ACTION_ROLES = [
+  {key:'cs',  label:'CS / MP'},
+  {key:'qa',  label:'QA'},
+  {key:'sup', label:'Supervisor'},
+  {key:'mgr', label:'Manager'},
+];
+function actionItemAge(role, it){
+  const m=/editEvaluation\('([^']+)'\)/.exec(it.onclick||''); if(!m) return null;
+  const e=evaluations.find(x=>x.id===m[1]); if(!e) return null;
+  if(it.overdue && e.rejected_at) return {d:daysSince(e.rejected_at), kind:'waiting'};
+  if(role==='sup'){ const t=[e.quality_submitted_at,e.delivery_submitted_at].filter(Boolean).sort().pop(); const d=daysSince(t); return d==null?null:{d,kind:'waiting'}; }
+  if(role==='mgr'){ const d=daysSince(e.sup_approved_at); return d==null?null:{d,kind:'waiting'}; }
+  if(role==='cs' && e.status==='mgr_approved'){ const d=daysSince(e.mgr_approved_at); return d==null?null:{d,kind:'waiting'}; }
+  const d=daysSince(new Date(e.year,e.month-1,1).toISOString());
+  return d==null?null:{d,kind:'open'};
+}
+function renderActionTabs(){
+  const wrap=document.getElementById('actionTabs'), list=document.getElementById('actionList');
+  if(!wrap||!list||!actionBoardData) return;
+  const data=actionBoardData;
+  const first=data.find(r=>r.mine&&r.items.length)||data.find(r=>r.mine)||data.find(r=>r.items.length)||data[0];
+  if(!actionTabSel || !data.some(r=>r.key===actionTabSel)) actionTabSel=first.key;
+  wrap.innerHTML=data.map(r=>{
+    const over=r.items.some(i=>i.overdue);
+    return `<button type="button" class="tab${r.key===actionTabSel?' on':''}${over?' has-overdue':''}" data-role="${r.key}">${r.label}${r.mine?` · ${L('mine','ของฉัน')}`:''} <b>${r.items.length}</b></button>`;
+  }).join('');
+  const cur=data.find(r=>r.key===actionTabSel);
+  if(!cur.items.length){ list.innerHTML=`<div class="action-empty wide">✓ ${L('All caught up','ครบหมดแล้ว')}</div>`; return; }
+  const LIMIT=5;
+  list.innerHTML=cur.items.slice(0,LIMIT).map(it=>{
+    const a=actionItemAge(cur.key,it);
+    const age=a&&a.d!=null?`${a.kind==='open'?L('open','เปิดมา'):L('waiting','รอ')} ${a.d} ${L('d','วัน')}`:it.tag;
+    return `<button class="action-item${it.overdue?' overdue':''}" onclick="${it.onclick}">
+      <div class="action-item-main"><b>${it.title}</b><span>${it.subtitle}</span></div>
+      <span class="action-item-tag">${age}</span></button>`;
+  }).join('')+(cur.items.length>LIMIT?`<button type="button" class="action-item action-more" data-more="${cur.key}">${L('View all','ดูทั้งหมด')} (${cur.items.length}) →</button>`:'');
+}
+
+/* ---- Main render ---- */
+function renderDashboardCommandCenter(){
+  if(!document.getElementById('dashMonthBtn')) return;
+  renderActionBoard();
+  const arr=dashboardEvaluations(), cas=dashboardCa();
+  const catSel=document.getElementById('dashCategory').value;
+  const activeInScope=allSuppliers.filter(s=>s.is_active!==false && (!catSel||s.category===catSel)).length||suppliers.length;
+  renderDashHead(arr, activeInScope);
+  renderMonthPopover();
+  renderDashTiles(arr, cas);
+  renderCyclePipeline(arr, activeInScope);
+  renderWatchList(arr);
+  renderPerformanceTrend();
+  renderIssuePareto();
+  // Rail badge: overdue corrective actions across everything
+  const badge=document.getElementById('navCaBadge');
+  if(badge){ const n=correctiveActions.filter(isCaOverdue).length; badge.textContent=n; badge.style.display=n?'inline-block':'none'; }
+}
+function renderDashTiles(arr, cas){
+  const done=arr.filter(isEvalComplete);
+  const set=(id,v)=>{const el=document.getElementById(id); if(el) el.textContent=v;};
+  const avg=mean(done.map(e=>toNum(e.total_score)));
+  document.getElementById('kpiAvgLabel').textContent=`${L('Average score','คะแนนเฉลี่ย')} (${done.length} ${L('completed','ใบที่เสร็จแล้ว')})`;
+  document.getElementById('kpiAvg').innerHTML = avg==null ? '—' : scoreNum(avg);
+  const keys=dashPeriodKeys(), cur=selectedDashPeriod(), idx=keys.indexOf(cur);
+  let deltaTxt=`${L('Target','เป้า')} 80`;
+  if(avg!=null && idx>0){
+    const prevKey=keys[idx-1];
+    const pv=mean(dashboardTrendScope().filter(e=>evalPeriodKey(e)===prevKey && isEvalComplete(e)).map(e=>toNum(e.total_score)));
+    if(pv!=null){ const d=avg-pv; deltaTxt=`<span class="${d>=0?'up':'dn'}">${d>=0?'▲':'▼'} ${Math.abs(d).toFixed(1)}</span> ${L('vs previous month','จากเดือนก่อน')} · ${deltaTxt}`; }
+  }
+  document.getElementById('kpiAvgDelta').innerHTML=deltaTxt;
+  const below=done.filter(e=>toNum(e.total_score)<(allSuppliers.find(s=>s.id===e.supplier?.id)?.target_score||80)).length;
+  set('kpiBelow', below);
+  set('kpiBelowSub', done.length?`${L('of','จาก')} ${done.length} ${L('completed','ใบที่เสร็จแล้ว')} →`:L('No completed evaluations yet','ยังไม่มีใบที่เสร็จ'));
+  const open=cas.filter(c=>c.status!=='closed'), over=open.filter(isCaOverdue).length;
+  set('kpiOpenCa', open.length);
+  document.getElementById('kpiCaSub').innerHTML=over?`<span class="dn">${L('Overdue','เกินกำหนด')} ${over}</span> →`:`${L('None overdue','ไม่มีที่เกินกำหนด')} →`;
+  const g={A:0,B:0,C:0,D:0}; done.forEach(e=>{ const k=e.grade||gradeOf(toNum(e.total_score)); if(g[k]!=null) g[k]++; });
+  document.getElementById('kpiGradeLabel').textContent=`${L('Grade mix','การกระจายเกรด')} (${done.length})`;
+  const bar=document.getElementById('gradeBar'), lg=document.getElementById('gradeLegend');
+  bar.innerHTML = done.length ? ['A','B','C','D'].map(k=>g[k]?`<i class="g-${k}" style="width:${g[k]/done.length*100}%"></i>`:'').join('') : '<i class="g-none" style="width:100%"></i>';
+  lg.innerHTML=['A','B','C','D'].map(k=>`<span><i class="gdot g-${k}"></i>${k} ${g[k]}</span>`).join('');
+}
+function renderCyclePipeline(arr,total){
+  const unopened=Math.max(0,total-arr.length);
+  const notStarted=unopened+arr.filter(e=>!e.quality_submitted_at&&!e.delivery_submitted_at).length;
+  const supOk=['sup_approved','mgr_approved','sent_to_supplier','acknowledged'], mgrOk=['mgr_approved','sent_to_supplier','acknowledged'];
+  const rows=[
+    [L('Not started','ยังไม่เริ่มกรอก'),notStarted,'warn'],
+    [L('QA submitted','QA ส่งแล้ว'),arr.filter(e=>e.quality_submitted_at).length,''],
+    [L('CS/MP submitted','CS/MP ส่งแล้ว'),arr.filter(e=>e.delivery_submitted_at).length,''],
+    [L('Supervisor approved','Supervisor อนุมัติ'),arr.filter(e=>supOk.includes(e.status)).length,''],
+    [L('Manager approved (done)','Manager อนุมัติ (เสร็จ)'),arr.filter(e=>mgrOk.includes(e.status)).length,'good'],
+  ];
+  const donePct=total?Math.round(rows[4][1]/total*100):0;
+  document.getElementById('cycleHealthPct').textContent=`${donePct}%`;
+  document.getElementById('cyclePipeline').innerHTML=rows.map(([l,n,c])=>`<div class="pipe-row"><span class="pipe-label">${l}</span><div class="pipe-track"><div class="pipe-fill ${c}" style="width:${total?Math.min(100,n/total*100):0}%"></div></div><span class="pipe-num">${n}</span></div>`).join('');
+  const note=document.getElementById('cycleNote');
+  const cur=selectedDashPeriod(), now=bangkokToday();
+  if(note){
+    note.style.display='none';
+    if(cur===`${now.y}-${String(now.m).padStart(2,'0')}`){
+      const left=new Date(now.y,now.m,0).getDate()-now.d;
+      if(left<=7 && donePct<80){ note.textContent=`⚠ ${L('Only','เหลือ')} ${left} ${L('days left but only','วัน แต่เสร็จแล้วเพียง')} ${donePct}% ${L('is done','')}`.trim(); note.style.display='block'; }
+    }
+  }
+}
+
+/* ---- Watch list ---- */
+function sparkSvg(vals, avgVals, color){
+  const n=vals.length, W=150, H=34; if(n<2) return `<span class="muted-small">—</span>`;
+  const all=vals.concat(avgVals.filter(v=>v!=null));
+  let lo=Math.min(...all), hi=Math.max(...all); if(hi-lo<6){ const c=(hi+lo)/2; lo=c-3; hi=c+3; }
+  const X=i=>2+i*(W-4)/(n-1), Y=v=>H-3-(v-lo)/(hi-lo)*(H-6);
+  const line=vals.map((v,i)=>`${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
+  const avgPts=avgVals.map((v,i)=>v==null?null:`${X(i).toFixed(1)},${Y(v).toFixed(1)}`).filter(Boolean).join(' ');
+  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true">${avgPts?`<polyline points="${avgPts}" fill="none" stroke="#9aa0a6" stroke-width="1.2" stroke-dasharray="3 3"/>`:''}<polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/><circle cx="${X(n-1).toFixed(1)}" cy="${Y(vals[n-1]).toFixed(1)}" r="3" fill="${color}"/></svg>`;
+}
+function renderWatchList(arr){
+  const el=document.getElementById('watchList'); if(!el) return;
+  const rows=[];
+  arr.forEach(e=>{
+    const r=supplierRisk(e);
+    const overdueCa=caForEval(e).find(isCaOverdue);
+    const dec=isEvalComplete(e)&&declining(e), delta=isEvalComplete(e)?scoreDelta(e):0;
+    const isPriority=r>=35, isWarning=dec||delta<=-5||!!overdueCa;
+    if(!isPriority&&!isWarning) return;
+    let reason='';
+    if(overdueCa) reason=L('Corrective action overdue','CA เกินกำหนด');
+    else if(dec) reason=L('Score declined 3 periods in a row','คะแนนลดลง 3 รอบติดต่อกัน');
+    else if(delta<=-5) reason=`${L('Score dropped','คะแนนลดลง')} ${Math.abs(delta).toFixed(1)} ${L('points','คะแนน')}`;
+    else if(isEvalComplete(e)&&toNum(e.total_score)<(e.supplier?.target_score||80)) reason=`${L('Below target','ต่ำกว่าเป้าหมาย')} (${scoreNum(e.total_score)})`;
+    else reason=L('Open corrective action','มี CA ที่ยังเปิดอยู่');
+    rows.push({e,r,reason,delta});
+  });
+  rows.sort((a,b)=>b.r-a.r);
+  const LIMIT=5, shown=rows.slice(0,LIMIT);
+  const trendScope=dashboardTrendScope().filter(isEvalComplete);
+  const avgByPeriod={}; trendScope.forEach(x=>{ const k=evalPeriodKey(x); (avgByPeriod[k]=avgByPeriod[k]||[]).push(toNum(x.total_score)); });
+  const colors={critical:'#a23b3b',high:'#b4650a',watch:'#c99a39',low:'#0e6e66'};
+  el.innerHTML = shown.length ? shown.map(x=>{
+    const band=riskBand(x.r), color=colors[band]||colors.watch;
+    const hist=supplierHistory(x.e).filter(h=>evalPeriodKey(h)<=evalPeriodKey(x.e)).slice(-12);
+    const vals=hist.map(h=>toNum(h.total_score));
+    const avgs=hist.map(h=>mean(avgByPeriod[evalPeriodKey(h)]||[]));
+    const sc=isEvalComplete(x.e)?scoreNum(x.e.total_score):'—';
+    const d=x.delta; const dTxt=isEvalComplete(x.e)&&hist.length>1 ? `<small class="${d<0?'dn':d>0?'up':''}">${d<0?'▼':d>0?'▲':'▬'} ${Math.abs(d).toFixed(1)}</small>` : '';
+    return `<button type="button" class="watch-row" onclick="editEvaluation('${x.e.id}')">
+      <span class="priority-dot" style="background:${color}"></span>
+      <span class="watch-main"><b>${escapeHtml(x.e.supplier?.code||'')} · ${escapeHtml(x.e.supplier?.short_name||x.e.supplier?.name||'')}</b><small>${x.reason}</small></span>
+      <span class="watch-spark">${sparkSvg(vals,avgs,color)}</span>
+      <span class="watch-score">${sc}${dTxt}</span></button>`;
+  }).join('') : `<div class="action-empty wide">✓ ${L('No priority or early-warning signal in this view','ไม่พบสัญญาณเร่งด่วนหรือเตือนล่วงหน้าในมุมมองนี้')}</div>`;
+  const btn=document.getElementById('btnViewAllRisk');
+  if(btn){ btn.style.display=rows.length>LIMIT?'inline-block':'none'; btn.textContent=`${L('View all','ดูทั้งหมด')} (${rows.length})`; }
+}
+
+/* ---- 12-month trend ---- */
+let trendMetric='total';
+function trendValue(e, metric){
+  const noShip=e.shipment_status==='no_shipment';
+  if(metric==='total') return toNum(e.total_score);
+  if(metric==='quality') return toNum(e.quality_score)/50*100;
+  if(noShip) return null;
+  if(metric==='delivery') return toNum(e.delivery_score)/40*100;
+  if(metric==='purchase') return toNum(e.purchase_score)/10*100;
+  return null;
+}
 function renderPerformanceTrend(){
   const c=document.getElementById('performanceTrend'); if(!c) return;
-  const scoped=dashboardTrendScope();
+  const scoped=dashboardTrendScope().filter(isEvalComplete);
   const periods=[...new Set(scoped.map(evalPeriodKey))].sort().slice(-12);
-  const vals=periods.map(p=>{
-    const a=scoped.filter(e=>evalPeriodKey(e)===p);
-    return a.length ? a.reduce((s,e)=>s+toNum(e.total_score),0)/a.length : null; // null = no data that period, leaves a gap instead of a fake dip to 0
+  const per=periods.map(p=>{
+    const vs=scoped.filter(e=>evalPeriodKey(e)===p).map(e=>({v:trendValue(e,trendMetric),e})).filter(x=>x.v!=null);
+    const sorted=vs.map(x=>x.v).sort((a,b)=>a-b);
+    return {n:sorted.length, avg:mean(sorted), lo:sorted.length>=5?pct(sorted,.1):null, hi:sorted.length>=5?pct(sorted,.9):null,
+            below: trendMetric==='total' ? vs.filter(x=>x.v<(allSuppliers.find(s=>s.id===x.e.supplier?.id)?.target_score||80)).length : 0};
   });
+  const cap=document.getElementById('trendCap');
+  if(cap) cap.textContent = trendMetric==='total'
+    ? L('Line = average · shaded = where most suppliers fall (10–90%) · bars = suppliers below target','เส้น = คะแนนเฉลี่ย · แถบจาง = ช่วงที่ Supplier ส่วนใหญ่อยู่ (10–90%) · แท่ง = จำนวน Supplier ต่ำกว่าเป้า')
+    : L('Shown as % of the section maximum · completed evaluations only','แสดงเป็น % ของคะแนนเต็มของส่วนนั้น · เฉพาะใบที่เสร็จแล้ว');
   const ctx=c.getContext('2d'),dpr=devicePixelRatio||1,W=c.clientWidth,H=c.clientHeight;
   if(!W||!H) return;
   c.width=W*dpr; c.height=H*dpr; ctx.scale(dpr,dpr); ctx.clearRect(0,0,W,H);
   if(!periods.length){
     ctx.fillStyle='#5b6470'; ctx.font='12px IBM Plex Sans'; ctx.textAlign='center';
-    ctx.fillText(L('No data in this view yet','ยังไม่มีข้อมูลในมุมมองนี้'), W/2, H/2); ctx.textAlign='left';
-    return;
+    ctx.fillText(L('No completed evaluations yet','ยังไม่มีใบประเมินที่เสร็จแล้ว'), W/2, H/2); ctx.textAlign='left'; return;
   }
-  const padL=34, padR=10, padT=10, padB=22;
-  const plotW=W-padL-padR, plotH=H-padT-padB;
-  const yFor=v=>padT+plotH-((v-50)/50)*plotH; // y-axis fixed 50–100, matches the grading scale
-  const xFor=i=>padL+(periods.length>1 ? i*(plotW/(periods.length-1)) : plotW/2);
-
-  // Horizontal gridlines + labels at the scale's meaningful thresholds
+  const vals=per.map(p=>p.avg).filter(v=>v!=null), lows=per.map(p=>p.lo).filter(v=>v!=null);
+  const minV=Math.min(...vals,...(lows.length?lows:[100]));
+  const yMin=Math.max(0,Math.min(50,Math.floor((minV-5)/10)*10)), yMax=100;
+  const padL=34,padR=10,padT=10,padB=22, plotW=W-padL-padR, plotH=H-padT-padB;
+  const yFor=v=>padT+plotH-((v-yMin)/(yMax-yMin))*plotH;
+  const xFor=i=>padL+(periods.length>1?i*(plotW/(periods.length-1)):plotW/2);
   ctx.strokeStyle='#eceae3'; ctx.fillStyle='#8a9096'; ctx.font='10px IBM Plex Mono'; ctx.textAlign='right';
-  [50,60,70,80,90,100].forEach(v=>{
-    const y=yFor(v);
-    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
-    ctx.fillText(String(v), padL-6, y+3);
-  });
+  for(let v=yMin; v<=yMax; v+=10){ const y=yFor(v); ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke(); ctx.fillText(String(v),padL-6,y+3); }
   ctx.textAlign='left';
-  // Target reference line at 80, distinguished from the plain gridlines
-  ctx.save(); ctx.strokeStyle='#c99a39'; ctx.setLineDash([3,3]); ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(padL,yFor(80)); ctx.lineTo(W-padR,yFor(80)); ctx.stroke(); ctx.restore();
-
-  // Area fill under the line (gapped where data is missing)
-  const grad=ctx.createLinearGradient(0,padT,0,padT+plotH);
-  grad.addColorStop(0,'rgba(14,110,102,.22)'); grad.addColorStop(1,'rgba(14,110,102,0)');
-  let segStart=null;
-  vals.forEach((v,i)=>{
-    if(v==null){ segStart=null; return; }
-    if(segStart==null){ ctx.beginPath(); ctx.moveTo(xFor(i),yFor(v)); segStart=i; }
-    else ctx.lineTo(xFor(i),yFor(v));
-    const isLastOfSeg = (i===vals.length-1) || vals[i+1]==null;
-    if(isLastOfSeg && segStart!=null){
-      ctx.lineTo(xFor(i),padT+plotH); ctx.lineTo(xFor(segStart),padT+plotH); ctx.closePath();
-      ctx.fillStyle=grad; ctx.fill();
-    }
-  });
-
-  // The line itself, plus a small marker dot on each real data point
+  if(trendMetric==='total'){
+    ctx.save(); ctx.strokeStyle='#a23b3b'; ctx.setLineDash([4,4]); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,yFor(80)); ctx.lineTo(W-padR,yFor(80)); ctx.stroke(); ctx.restore();
+    ctx.fillStyle='#a23b3b'; ctx.font='9px IBM Plex Sans'; ctx.textAlign='right'; ctx.fillText(L('Target 80','เป้า 80'),W-padR,yFor(80)-4); ctx.textAlign='left';
+  }
+  // shaded 10–90% band between consecutive periods that both have it
+  ctx.fillStyle='rgba(14,110,102,.10)';
+  for(let i=0;i<per.length-1;i++){
+    const a=per[i], b=per[i+1]; if(a.lo==null||b.lo==null) continue;
+    ctx.beginPath(); ctx.moveTo(xFor(i),yFor(a.hi)); ctx.lineTo(xFor(i+1),yFor(b.hi)); ctx.lineTo(xFor(i+1),yFor(b.lo)); ctx.lineTo(xFor(i),yFor(a.lo)); ctx.closePath(); ctx.fill();
+  }
+  // below-target bars (total only), drawn in a thin strip at the bottom of the plot
+  if(trendMetric==='total'){
+    const maxB=Math.max(1,...per.map(p=>p.below)); ctx.fillStyle='rgba(180,101,10,.55)';
+    per.forEach((p,i)=>{ if(!p.below) return; const h=p.below/maxB*Math.min(28,plotH*.22); ctx.fillRect(xFor(i)-6,padT+plotH-h,12,h); });
+  }
   ctx.strokeStyle='#0e6e66'; ctx.lineWidth=2.4; ctx.lineJoin='round'; ctx.lineCap='round';
-  segStart=null;
-  vals.forEach((v,i)=>{
-    if(v==null){ segStart=null; return; }
-    if(segStart==null){ ctx.beginPath(); ctx.moveTo(xFor(i),yFor(v)); segStart=i; }
-    else ctx.lineTo(xFor(i),yFor(v));
-  });
+  let seg=false; ctx.beginPath();
+  per.forEach((p,i)=>{ if(p.avg==null){ seg=false; return; } if(!seg){ ctx.moveTo(xFor(i),yFor(p.avg)); seg=true; } else ctx.lineTo(xFor(i),yFor(p.avg)); });
   ctx.stroke();
-  vals.forEach((v,i)=>{
-    if(v==null) return;
-    ctx.beginPath(); ctx.arc(xFor(i),yFor(v),3.4,0,Math.PI*2);
-    ctx.fillStyle='#fff'; ctx.fill(); ctx.lineWidth=1.6; ctx.strokeStyle='#0e6e66'; ctx.stroke();
-  });
-
-  // X-axis month labels
+  per.forEach((p,i)=>{ if(p.avg==null) return; ctx.beginPath(); ctx.arc(xFor(i),yFor(p.avg),3.4,0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill(); ctx.lineWidth=1.6; ctx.strokeStyle='#0e6e66'; ctx.stroke(); });
   ctx.fillStyle='#5b6470'; ctx.font='10px IBM Plex Sans'; ctx.textAlign='center';
-  periods.forEach((p,i)=>{ ctx.fillText(monthName(parseInt(p.slice(5),10)), xFor(i), H-6); });
+  periods.forEach((p,i)=>{ ctx.fillText(monthName(parseInt(p.slice(5),10)),xFor(i),H-6); });
   ctx.textAlign='left';
 }
-function renderIssuePareto(arr){
-  // Detail rows are optional; show an honest empty state when the item cache is not globally loaded.
-  // Group by lineage_id (not id) so a criteria that's been versioned still
-  // aggregates as "the same topic" across all its versions — see
-  // 24_criteria_versioning.sql. Label uses the latest version's text.
-  const counts={}; const labelFor={};
+
+/* ---- Pareto ---- */
+let paretoMode='count';
+function renderIssuePareto(){
+  const el=document.getElementById('issuePareto'); if(!el) return;
+  const doneIds=new Set(evaluations.filter(isEvalComplete).map(e=>e.id));
+  const periodOf=new Map(evaluations.map(e=>[e.id,evalPeriodKey(e)]));
+  const keys=dashPeriodKeys(), cur=selectedDashPeriod(), idx=keys.indexOf(cur);
+  const prevKey= idx>0 ? keys[idx-1] : null;
+  const tot={}, curP={}, prevP={}, label={}, cat={};
   (dashItemRows||[]).forEach(x=>{
+    if(!doneIds.has(x.evaluation_id)) return;
     const c=evaluationCriteria.find(k=>k.id===x.criteria_id);
-    // Purchase-tier criteria (C-1/C-2/C-3) are positive credit awarded by order-volume
-    // tier — not a recorded problem — so they're excluded from the Pareto of issue causes.
-    if(c&&c.category!=='purchase'&&toNum(x.occurrence)>0){
-      const key=c.lineage_id||c.id;
-      counts[key]=(counts[key]||0)+toNum(x.occurrence);
-      // Prefer the active (latest) version's description as the display label.
-      if(!labelFor[key]||c.is_active) labelFor[key]=officialDescription(c);
-    }
+    // Purchase tiers are credit by order-volume, not a recorded problem
+    if(!c||c.category==='purchase'||toNum(x.occurrence)<=0) return;
+    const key=c.lineage_id||c.id;
+    const w=paretoMode==='points' ? toNum(x.occurrence)*criteriaPoint(c) : toNum(x.occurrence);
+    tot[key]=(tot[key]||0)+w;
+    const pk=periodOf.get(x.evaluation_id);
+    if(pk===cur) curP[key]=(curP[key]||0)+w;
+    if(prevKey && pk===prevKey) prevP[key]=(prevP[key]||0)+w;
+    if(!label[key]||c.is_active) label[key]=officialDescription(c);
+    cat[key]=isEnvironmentCriteria(c)?L('Environment','สิ่งแวดล้อม'):(c.category==='delivery'?'Delivery':'Quality');
   });
-  const rows=Object.entries(counts).map(([key,n])=>[labelFor[key]||key,n]).sort((a,b)=>b[1]-a[1]).slice(0,7),max=rows[0]?.[1]||1;
-  document.getElementById('issuePareto').innerHTML=rows.length?rows.map(([l,n])=>`<div class="pareto-row"><span class="pareto-label" title="${l}">${l}</span><div class="pareto-track"><div class="pareto-fill" style="width:${n/max*100}%"></div></div><span class="pareto-num">${n}</span></div>`).join(''):`<div class="empty-note">${L('Issue Pareto will populate from itemized checklist records','พาเรโตจะแสดงเมื่อมีข้อมูลการให้คะแนนแบบรายหัวข้อ')}</div>`;
+  const rows=Object.entries(tot).sort((a,b)=>b[1]-a[1]).slice(0,7), max=rows[0]?.[1]||1;
+  if(!rows.length){ el.innerHTML=`<div class="empty-note">${L('No recorded issues yet','ยังไม่มีสาเหตุปัญหาที่บันทึกไว้')}</div>`; return; }
+  const fmt=n=>paretoMode==='points'?(Math.round(n*10)/10):n;
+  el.innerHTML=rows.map(([key,n])=>{
+    const l=escapeHtml(label[key]||key);
+    let arrow='';
+    if(prevKey){ const d=(curP[key]||0)-(prevP[key]||0); arrow=d>0?`<span class="pareto-num dn">▲ ${fmt(d)}</span>`:d<0?`<span class="pareto-num up">▼ ${fmt(-d)}</span>`:`<span class="pareto-num">▬</span>`; }
+    return `<div class="pareto-row"><span class="pareto-label" title="${l}">${l} <small>· ${cat[key]}</small></span><div class="pareto-track"><div class="pareto-fill" style="width:${n/max*100}%"></div></div><span class="pareto-num">${fmt(n)}</span>${arrow}</div>`;
+  }).join('');
 }
+
 async function loadDashboardItemRows(){
   // Was scoped to only the single currently-selected period — with itemized
   // scoring still new, that period alone often has little or no data,
@@ -4347,8 +4501,29 @@ function wireEvents(){
   ['dashPeriod','dashCategory','dashShipment','dashRisk'].forEach(id => document.getElementById(id)?.addEventListener('change', refreshDashboard));
   document.getElementById('btnDashReset')?.addEventListener('click', () => { document.getElementById('dashCategory').value=''; document.getElementById('dashShipment').value=''; document.getElementById('dashRisk').value=''; refreshDashboard(); });
   document.getElementById('btnViewAllRisk')?.addEventListener('click', () => showTab('list'));
-  wireRiskMatrixTooltip();
-  document.querySelectorAll('.action-chip').forEach(b=>b.addEventListener('click',()=>{ const f=b.dataset.actionFilter; if(f==='ca') showTab('ca'); else showTab('list'); }));
+  document.querySelectorAll('.kpi.click[data-go]').forEach(k=>k.addEventListener('click',()=>showTab(k.dataset.go)));
+  document.getElementById('actionTabs')?.addEventListener('click',(ev)=>{ const b=ev.target.closest('[data-role]'); if(!b) return; actionTabSel=b.dataset.role; renderActionTabs(); });
+  document.getElementById('actionList')?.addEventListener('click',(ev)=>{ if(ev.target.closest('[data-more]')) showTab('list'); });
+  const stepPeriod=(dir)=>{ const keys=dashPeriodKeys(), i=keys.indexOf(selectedDashPeriod()); const k=keys[i+dir]; if(k) setDashPeriod(k); };
+  document.getElementById('dashPrev')?.addEventListener('click',()=>stepPeriod(-1));
+  document.getElementById('dashNext')?.addEventListener('click',()=>stepPeriod(1));
+  document.getElementById('dashMonthBtn')?.addEventListener('click',(ev)=>{
+    ev.stopPropagation(); const pop=document.getElementById('dashMonthPop'); const open=pop.style.display==='none';
+    if(open){ dashPopYear=null; renderMonthPopover(); }
+    pop.style.display=open?'block':'none';
+  });
+  document.getElementById('dashMonthPop')?.addEventListener('click',(ev)=>{
+    ev.stopPropagation();
+    const cell=ev.target.closest('[data-key]'), yr=ev.target.closest('[data-yr]'), latest=ev.target.closest('[data-latest]');
+    if(cell && !cell.disabled){ document.getElementById('dashMonthPop').style.display='none'; setDashPeriod(cell.dataset.key); }
+    else if(yr && !yr.disabled){ dashPopYear+=parseInt(yr.dataset.yr,10); renderMonthPopover(); }
+    else if(latest){ const keys=dashPeriodKeys(); document.getElementById('dashMonthPop').style.display='none'; setDashPeriod(keys[keys.length-1]); }
+  });
+  document.addEventListener('click',()=>{ const p=document.getElementById('dashMonthPop'); if(p) p.style.display='none'; });
+  document.getElementById('trendSeg')?.addEventListener('click',(ev)=>{ const b=ev.target.closest('[data-metric]'); if(!b) return; trendMetric=b.dataset.metric; document.querySelectorAll('#trendSeg button').forEach(x=>x.classList.toggle('on',x===b)); renderPerformanceTrend(); });
+  document.getElementById('paretoSeg')?.addEventListener('click',(ev)=>{ const b=ev.target.closest('[data-mode]'); if(!b) return; paretoMode=b.dataset.mode; document.querySelectorAll('#paretoSeg button').forEach(x=>x.classList.toggle('on',x===b)); renderIssuePareto(); });
+  document.getElementById('btnDashPrint')?.addEventListener('click',()=>window.print());
+  document.getElementById('dashOverview')?.addEventListener('toggle',()=>{ if(document.getElementById('dashOverview').open) requestAnimationFrame(renderPerformanceTrend); });
   document.getElementById('langToggle').addEventListener('click', () => {
     lang = lang === 'th' ? 'en' : 'th';
     renderAll();

@@ -1,3 +1,27 @@
+### [Package v92] — 2026-10-21 — Dashboard redesign, grouped menu, automatic monthly cycle opening
+
+**SQL to run:** `database/35_auto_open_current_cycle.sql` (requires `16_evaluation_cycles.sql`). The app still works without it; it just won't auto-open the month.
+
+#### Added
+- Dashboard header: large month/year title with ◀ ▶ and a month picker (months with data are marked); supplier-group / shipment / risk filters sit after it, de-emphasised; print/export button.
+- "What I need to do" is now role tabs in the order CS/MP → QA → Supervisor → Manager. The user's own tab opens first, 5 rows max, rows show age ("open 20 d" / "waiting 3 d"), rejected/overdue first.
+- Four tiles: average score (vs previous month, target 80), below target, open Corrective Actions (overdue count), grade mix (A/B/C/D bar). Tiles are clickable.
+- Cycle health shows a warning when the month is nearly over and little is done.
+- Watch list (replaces Priority queue + Risk matrix): each row has a 12-month sparkline of the supplier against the all-supplier average (dashed).
+- Collapsible "Overview — history": 12-month trend with target line, 10–90% band, below-target bars and Total/Quality/Delivery/Purchase switch; Pareto with Count / Points-lost switch and arrows vs previous month.
+- `ensure_current_cycle()` (SQL 35): any signed-in user's first load of the month creates draft evaluations for active suppliers that have none (Asia/Bangkok month). Idempotent. Admin's manual "open cycle" button in Setup still works.
+- Left menu grouped (Daily work / Data & reports / System); Corrective Action now has its own menu entry with an overdue badge.
+
+#### Changed
+- Score-based numbers (average, below target, risk, trend, sparklines, Pareto) now count only COMPLETED evaluations (both Quality and Delivery/Purchase submitted), so freshly opened drafts no longer distort them.
+- The risk matrix was removed (its job moved into the watch list).
+- Evaluations query now also loads `sup_approved_at` / `mgr_approved_at` (the v91 report timeline needed them).
+
+#### Not done / to check
+- "Expected progress for this point in the cycle" is not shown (no baseline yet); the warning only uses days left vs percent done.
+- Pareto bars are not clickable yet.
+- Tested offline with mock data only; please check against live data.
+
 ### [Package v91b] — 2026-10-21 — Config extracted; libraries and fonts vendored (offline-ready)
 
 No SQL changes.

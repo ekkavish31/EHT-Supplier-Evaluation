@@ -11,7 +11,7 @@ Package สำหรับส่งต่องานให้ session/ทีม
 2. รัน `database/02_seed_data.sql`
 3. รัน `database/03_phase2_auth_and_roles.sql`
 4. เปิด Supabase Dashboard → Authentication → Providers → Email → ปิด "Confirm email" ถ้าต้องการทดสอบเร็วๆ
-5. แก้ `app/app.js` บรรทัดบนสุด ใส่ `SUPABASE_URL` และ `SUPABASE_ANON_KEY` ของโปรเจกต์ตัวเอง
+5. แก้ `config.js` ใส่ `SUPABASE_URL` และ `SUPABASE_ANON_KEY` ของโปรเจกต์ตัวเอง (ห้ามใส่ service_role key)
 6. เปิด `app/index.html` ในเบราว์เซอร์ → สมัครสมาชิกแรก (เลือกแผนกได้ตอนสมัคร) → เข้าใช้งาน
 
 ## โครงสร้างไฟล์
@@ -27,5 +27,5 @@ EHT_Supplier_Evaluation_v03/
 └── app/
     ├── index.html
     ├── style.css
-    └── app.js               ← ต้องแก้ SUPABASE_URL / ANON_KEY ก่อนใช้งาน
+    └── app.js               ← โค้ดหลักของแอป (ไม่ต้องแก้ค่าเชื่อมต่อ — ไปแก้ที่ config.js)
 ```
